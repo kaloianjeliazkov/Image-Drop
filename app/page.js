@@ -512,6 +512,8 @@ export default function Home() {
   useEffect(() => {
     if (!editingFile) { editImageRef.current = null; return; }
     const img = new Image();
+    // Request the image with CORS so the canvas stays untainted and can be exported (toBlob)
+    img.crossOrigin = 'anonymous';
     img.onload = () => {
       editImageRef.current = img;
       const canvas = canvasRef.current;
@@ -520,6 +522,10 @@ export default function Home() {
       canvas.width = Math.round(img.width * scale);
       canvas.height = Math.round(img.height * scale);
       redraw();
+    };
+    img.onerror = () => {
+      showToast('❌ Could not load image for editing');
+      setEditingFile(null);
     };
     img.src = editingFile.url;
   }, [editingFile]);
