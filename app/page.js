@@ -355,6 +355,8 @@ export default function Home() {
     } catch (err) {
       showToast('Delete failed');
     }
+  };
+
   // Delete entire folder (all files inside + remove tab)
   const handleDeleteFolder = async (folderName, e) => {
     if (e) e.stopPropagation();
