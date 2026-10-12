@@ -2,6 +2,8 @@
 
 import { useState, useEffect, useRef } from 'react';
 import { upload } from '@vercel/blob/client';
+import JSZip from 'jszip';
+import { saveAs } from 'file-saver';
 
 export default function Home() {
   const [files, setFiles] = useState([]);
@@ -13,11 +15,23 @@ export default function Home() {
   const [uploadStatus, setUploadStatus] = useState('');
   const [lightboxIndex, setLightboxIndex] = useState(null);
   const [toast, setToast] = useState('');
+  
+  // Multi-select & Batch features
+  const [selectedUrls, setSelectedUrls] = useState(new Set());
+  const [isZipping, setIsZipping] = useState(false);
+  const [zipProgress, setZipProgress] = useState('');
+  
+  // Settings Modal & Directory Handle (File System Access API)
+  const [showSettings, setShowSettings] = useState(false);
+  const [customDirHandle, setCustomDirHandle] = useState(null);
+  const [customDirName, setCustomDirName] = useState('');
+  const [autoSaveDirect, setAutoSaveDirect] = useState(false);
+
   const fileInputRef = useRef(null);
 
   const showToast = (msg) => {
     setToast(msg);
-    setTimeout(() => setToast(''), 3000);
+    setTimeout(() => setToast(''), 3500);
   };
 
   const loadFiles = async () => {
@@ -53,6 +67,11 @@ export default function Home() {
     loadFiles();
     const timer = setInterval(loadFiles, 12000);
     return () => clearInterval(timer);
+  }, [currentFolder]);
+
+  // Clear selections when switching folder
+  useEffect(() => {
+    setSelectedUrls(new Set());
   }, [currentFolder]);
 
   const handleUpload = async (fileList) => {
@@ -94,6 +113,126 @@ export default function Home() {
     }
   };
 
+  // Toggle select single item
+  const toggleSelect = (url) => {
+    const updated = new Set(selectedUrls);
+    if (updated.has(url)) {
+      updated.delete(url);
+    } else {
+      updated.add(url);
+    }
+    setSelectedUrls(updated);
+  };
+
+  const currentFolderFiles = files.filter(f => f.folder === currentFolder);
+
+  // Select / Deselect all in current folder
+  const handleSelectAll = () => {
+    if (selectedUrls.size === currentFolderFiles.length) {
+      setSelectedUrls(new Set());
+    } else {
+      setSelectedUrls(new Set(currentFolderFiles.map(f => f.url)));
+    }
+  };
+
+  // Direct save to custom folder if File System Access API is supported and configured
+  const saveFileToDirectory = async (filename, blob) => {
+    if (customDirHandle && autoSaveDirect) {
+      try {
+        const fileHandle = await customDirHandle.getFileHandle(filename, { create: true });
+        const writable = await fileHandle.createWritable();
+        await writable.write(blob);
+        await writable.close();
+        return true;
+      } catch (err) {
+        console.warn('Failed direct directory write:', err);
+      }
+    }
+    return false;
+  };
+
+  // Download a single file
+  const downloadSingleFile = async (file) => {
+    try {
+      showToast(`Downloading ${file.name}...`);
+      const response = await fetch(file.url);
+      const blob = await response.blob();
+      
+      const savedDirect = await saveFileToDirectory(file.name, blob);
+      if (savedDirect) {
+        showToast(`Saved to ${customDirName}!`);
+      } else {
+        saveAs(blob, file.name);
+      }
+    } catch (err) {
+      showToast(`Download failed: ${err.message}`);
+    }
+  };
+
+  // Download files (either selected or entire folder) as a ZIP archive
+  const downloadAsZip = async (filesToDownload, zipName) => {
+    if (filesToDownload.length === 0) return;
+    setIsZipping(true);
+    setZipProgress(`Preparing 0/${filesToDownload.length}...`);
+
+    try {
+      const zip = new JSZip();
+      let completed = 0;
+
+      for (const item of filesToDownload) {
+        try {
+          const resp = await fetch(item.url);
+          const blob = await resp.blob();
+          zip.file(item.name, blob);
+        } catch (e) {
+          console.error(`Failed to fetch ${item.name}`, e);
+        }
+        completed++;
+        setZipProgress(`Downloading ${completed}/${filesToDownload.length}...`);
+      }
+
+      setZipProgress('Generating ZIP package...');
+      const zipContent = await zip.generateAsync({ type: 'blob' }, (metadata) => {
+        setZipProgress(`Zipping... ${Math.round(metadata.percent)}%`);
+      });
+
+      const finalName = `${zipName}.zip`;
+      const savedDirect = await saveFileToDirectory(finalName, zipContent);
+      if (savedDirect) {
+        showToast(`✓ ZIP saved to ${customDirName}!`);
+      } else {
+        saveAs(zipContent, finalName);
+        showToast(`✓ Downloaded ${finalName}`);
+      }
+    } catch (err) {
+      console.error(err);
+      showToast(`❌ Error creating ZIP: ${err.message}`);
+    }
+
+    setIsZipping(false);
+    setZipProgress('');
+  };
+
+  // Delete selected files
+  const handleDeleteSelected = async () => {
+    if (selectedUrls.size === 0) return;
+    if (!confirm(`Delete ${selectedUrls.size} selected file(s)?`)) return;
+
+    try {
+      await fetch('/api/files', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ urls: Array.from(selectedUrls) }),
+      });
+      showToast(`Deleted ${selectedUrls.size} files`);
+      setSelectedUrls(new Set());
+      loadFiles();
+    } catch (err) {
+      showToast('Delete failed');
+    }
+  };
+
+  // Delete single file
   const handleDelete = async (url) => {
     if (!confirm('Delete this file?')) return;
     try {
@@ -119,13 +258,29 @@ export default function Home() {
         body: JSON.stringify({ urls }),
       });
       showToast('All files cleared');
+      setSelectedUrls(new Set());
       loadFiles();
     } catch (err) {
       showToast('Clear failed');
     }
   };
 
-  const currentFolderFiles = files.filter(f => f.folder === currentFolder);
+  // Pick default download folder via File System Access API
+  const handlePickDirectory = async () => {
+    if (!window.showDirectoryPicker) {
+      alert("Your browser does not support picking default folders directly. To configure where downloads go, set your browser's default download folder in Chrome/Edge/Brave/Safari Settings -> Downloads.");
+      return;
+    }
+    try {
+      const dirHandle = await window.showDirectoryPicker({ mode: 'readwrite' });
+      setCustomDirHandle(dirHandle);
+      setCustomDirName(dirHandle.name);
+      setAutoSaveDirect(true);
+      showToast(`✓ Set download folder: ${dirHandle.name}`);
+    } catch (err) {
+      console.warn('Folder selection aborted or denied', err);
+    }
+  };
 
   return (
     <div>
@@ -137,7 +292,10 @@ export default function Home() {
         <h1 style={{ margin: 0, fontSize: '20px', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '8px' }}>
           <span>📸</span> Image Drop
         </h1>
-        <div style={{ display: 'flex', gap: '8px' }}>
+        <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+          <button onClick={() => setShowSettings(true)} style={btnGhost} title="Settings & Download Location">
+            ⚙️ Settings
+          </button>
           <button onClick={loadFiles} style={btnGhost}>↻ Refresh</button>
           <button onClick={handleClearAll} style={btnDanger}>🗑 Clear All</button>
         </div>
@@ -145,9 +303,9 @@ export default function Home() {
 
       {/* Main Container */}
       <main style={{ maxWidth: '1200px', margin: '0 auto', padding: '20px' }}>
-        {/* Folder Select */}
+        {/* Target Folder Selector */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '16px', flexWrap: 'wrap' }}>
-          <label style={{ fontSize: '14px', color: '#888', fontWeight: 600 }}>📂 Target Folder:</label>
+          <label style={{ fontSize: '14px', color: '#888', fontWeight: 600 }}>📂 Target Upload Folder:</label>
           <input
             type="text"
             value={folderInput}
@@ -169,14 +327,14 @@ export default function Home() {
             if (e.dataTransfer.files?.length) handleUpload(e.dataTransfer.files);
           }}
           style={{
-            border: '2px dashed #444', borderRadius: '12px', padding: '40px 20px',
-            textAlign: 'center', cursor: 'pointer', marginBottom: '24px', background: '#1a1a1a'
+            border: '2px dashed #444', borderRadius: '12px', padding: '36px 20px',
+            textAlign: 'center', cursor: 'pointer', marginBottom: '20px', background: '#1a1a1a'
           }}
         >
-          <div style={{ fontSize: '48px', marginBottom: '12px' }}>☁️</div>
+          <div style={{ fontSize: '42px', marginBottom: '8px' }}>☁️</div>
           <h3 style={{ margin: 0, fontSize: '18px' }}>Tap to select photos/videos or drag & drop</h3>
           <p style={{ margin: '8px 0 0', color: '#888', fontSize: '14px' }}>
-            Supports photos and screen recordings (MP4, MOV, WebM) • Up to 250MB
+            Supports photos & screen recordings (MP4, MOV, WebM, etc.) • Up to 250MB
           </p>
           <input
             type="file"
@@ -190,7 +348,7 @@ export default function Home() {
           />
         </div>
 
-        {/* Progress Bar */}
+        {/* Progress Bar for Upload */}
         {isUploading && (
           <div style={{ marginBottom: '20px' }}>
             <div style={{ height: '6px', background: '#252525', borderRadius: '3px', overflow: 'hidden' }}>
@@ -204,7 +362,7 @@ export default function Home() {
 
         {/* Folder Tabs */}
         {folders.length > 0 && (
-          <div style={{ display: 'flex', gap: '8px', marginBottom: '20px', flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', gap: '8px', marginBottom: '16px', flexWrap: 'wrap' }}>
             {folders.map(f => (
               <button
                 key={f.name}
@@ -231,6 +389,59 @@ export default function Home() {
           </div>
         )}
 
+        {/* Folder Actions Toolbar (Download Folder, Select All, Batch Actions) */}
+        {currentFolderFiles.length > 0 && (
+          <div style={{
+            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+            background: '#161616', border: '1px solid #282828', borderRadius: '10px',
+            padding: '10px 14px', marginBottom: '16px', flexWrap: 'wrap', gap: '10px'
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+              <button onClick={handleSelectAll} style={btnGhost}>
+                {selectedUrls.size === currentFolderFiles.length ? '☑ Deselect All' : '☐ Select All'}
+              </button>
+              <span style={{ fontSize: '13px', color: '#888' }}>
+                {selectedUrls.size > 0 ? `${selectedUrls.size} of ${currentFolderFiles.length} selected` : `${currentFolderFiles.length} item(s)`}
+              </span>
+            </div>
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              {selectedUrls.size > 0 ? (
+                <>
+                  <button
+                    onClick={() => downloadAsZip(currentFolderFiles.filter(f => selectedUrls.has(f.url)), `${currentFolder}_selected`)}
+                    disabled={isZipping}
+                    style={btnPrimary}
+                  >
+                    ⬇ Download Selected ({selectedUrls.size})
+                  </button>
+                  <button onClick={handleDeleteSelected} style={btnDanger}>
+                    🗑 Delete Selected
+                  </button>
+                </>
+              ) : (
+                <button
+                  onClick={() => downloadAsZip(currentFolderFiles, currentFolder)}
+                  disabled={isZipping}
+                  style={btnPrimary}
+                >
+                  📦 Download Folder ({currentFolder}) as ZIP
+                </button>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* ZIP Download Progress */}
+        {isZipping && (
+          <div style={{
+            background: '#25203f', border: '1px solid #6c63ff', borderRadius: '8px',
+            padding: '12px', marginBottom: '16px', textAlign: 'center', fontSize: '13px', color: '#e8e8e8'
+          }}>
+            ⏳ {zipProgress}
+          </div>
+        )}
+
         {/* Media Grid */}
         {currentFolderFiles.length === 0 ? (
           <div style={{ textAlign: 'center', padding: '60px 20px', color: '#888' }}>
@@ -242,44 +453,140 @@ export default function Home() {
           <div style={{
             display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: '12px'
           }}>
-            {currentFolderFiles.map((file, idx) => (
-              <div key={file.url} style={{
-                background: '#1a1a1a', border: '1px solid #333', borderRadius: '12px',
-                overflow: 'hidden', position: 'relative'
-              }}>
-                {file.isVideo ? (
-                  <div style={{ position: 'relative', width: '100%', aspectRatio: '1', cursor: 'pointer' }} onClick={() => setLightboxIndex(idx)}>
-                    <video src={file.url} muted preload="metadata" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-                    <div style={{
-                      position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)',
-                      background: 'rgba(0,0,0,0.6)', color: 'white', borderRadius: '50%', width: '44px',
-                      height: '44px', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '20px'
-                    }}>
-                      ▶
+            {currentFolderFiles.map((file, idx) => {
+              const isSelected = selectedUrls.has(file.url);
+              return (
+                <div
+                  key={file.url}
+                  style={{
+                    background: '#1a1a1a',
+                    border: isSelected ? '2px solid #6c63ff' : '1px solid #333',
+                    borderRadius: '12px',
+                    overflow: 'hidden',
+                    position: 'relative',
+                    transition: 'border-color 0.15s'
+                  }}
+                >
+                  {/* Select Checkbox in Corner */}
+                  <div
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      toggleSelect(file.url);
+                    }}
+                    style={{
+                      position: 'absolute', top: '8px', left: '8px', zIndex: 10,
+                      background: isSelected ? '#6c63ff' : 'rgba(0,0,0,0.6)',
+                      color: 'white', borderRadius: '6px', width: '26px', height: '26px',
+                      display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      cursor: 'pointer', border: '1px solid rgba(255,255,255,0.4)',
+                      fontSize: '14px', fontWeight: 'bold'
+                    }}
+                  >
+                    {isSelected ? '✓' : ''}
+                  </div>
+
+                  {file.isVideo ? (
+                    <div style={{ position: 'relative', width: '100%', aspectRatio: '1', cursor: 'pointer' }} onClick={() => setLightboxIndex(idx)}>
+                      <video src={file.url} muted preload="metadata" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                      <div style={{
+                        position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)',
+                        background: 'rgba(0,0,0,0.6)', color: 'white', borderRadius: '50%', width: '44px',
+                        height: '44px', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '20px'
+                      }}>
+                        ▶
+                      </div>
+                    </div>
+                  ) : (
+                    <img
+                      src={file.url}
+                      alt={file.name}
+                      loading="lazy"
+                      onClick={() => setLightboxIndex(idx)}
+                      style={{ width: '100%', aspectRatio: '1', objectFit: 'cover', cursor: 'pointer', display: 'block' }}
+                    />
+                  )}
+                  <div style={{ padding: '10px 12px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <span style={{ fontSize: '12px', color: '#888', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '110px' }} title={file.name}>
+                      {file.name}
+                    </span>
+                    <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                      <button
+                        onClick={() => downloadSingleFile(file)}
+                        style={{ background: 'none', border: 'none', color: '#888', cursor: 'pointer', fontSize: '14px' }}
+                        title="Download file"
+                      >
+                        ⬇
+                      </button>
+                      <button
+                        onClick={() => handleDelete(file.url)}
+                        style={{ background: 'none', border: 'none', color: '#888', cursor: 'pointer', fontSize: '15px' }}
+                        title="Delete file"
+                      >
+                        🗑
+                      </button>
                     </div>
                   </div>
-                ) : (
-                  <img
-                    src={file.url}
-                    alt={file.name}
-                    loading="lazy"
-                    onClick={() => setLightboxIndex(idx)}
-                    style={{ width: '100%', aspectRatio: '1', objectFit: 'cover', cursor: 'pointer', display: 'block' }}
-                  />
-                )}
-                <div style={{ padding: '10px 12px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                  <span style={{ fontSize: '12px', color: '#888', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '130px' }} title={file.name}>
-                    {file.name}
-                  </span>
-                  <button onClick={() => handleDelete(file.url)} style={{ background: 'none', border: 'none', color: '#888', cursor: 'pointer', fontSize: '16px' }} title="Delete">
-                    🗑
-                  </button>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </main>
+
+      {/* Settings Modal */}
+      {showSettings && (
+        <div
+          onClick={() => setShowSettings(false)}
+          style={{
+            position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.8)', zIndex: 300,
+            display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px'
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              background: '#1e1e1e', border: '1px solid #333', borderRadius: '14px',
+              padding: '24px', maxWidth: '480px', width: '100%', color: '#e8e8e8'
+            }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+              <h3 style={{ margin: 0, fontSize: '18px' }}>⚙️ Download & Save Settings</h3>
+              <button onClick={() => setShowSettings(false)} style={{ background: 'none', border: 'none', color: '#888', fontSize: '20px', cursor: 'pointer' }}>✕</button>
+            </div>
+
+            <div style={{ fontSize: '14px', color: '#bbb', lineHeight: '1.5', marginBottom: '20px' }}>
+              <p style={{ marginTop: 0 }}>
+                <strong>Direct Laptop Folder:</strong> You can select a dedicated folder on your laptop (e.g. <code>Downloads/ImageDrop</code>) where downloaded files and ZIP packages will be saved directly.
+              </p>
+
+              {customDirName ? (
+                <div style={{ background: '#252525', padding: '12px', borderRadius: '8px', marginBottom: '12px' }}>
+                  <div style={{ color: '#4caf50', fontWeight: 600 }}>✓ Direct Folder Selected:</div>
+                  <div style={{ fontSize: '13px', marginTop: '4px', wordBreak: 'break-all' }}>📁 {customDirName}</div>
+                </div>
+              ) : (
+                <div style={{ background: '#252525', padding: '12px', borderRadius: '8px', marginBottom: '12px', color: '#888' }}>
+                  No dedicated folder chosen yet. Files go to your standard browser Downloads.
+                </div>
+              )}
+
+              <button onClick={handlePickDirectory} style={btnPrimary}>
+                📁 {customDirName ? 'Change Folder' : 'Choose Download Folder'}
+              </button>
+
+              <hr style={{ border: 'none', borderTop: '1px solid #333', margin: '20px 0' }} />
+
+              <p style={{ fontSize: '13px', color: '#777', margin: 0 }}>
+                💡 <em>Tip for Mobile:</em> On iOS and Android, downloads automatically save to your device's Files app or default Downloads folder.
+              </p>
+            </div>
+
+            <button onClick={() => setShowSettings(false)} style={{ ...btnGhost, width: '100%', padding: '10px' }}>
+              Done
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Lightbox */}
       {lightboxIndex !== null && currentFolderFiles[lightboxIndex] && (
@@ -318,20 +625,19 @@ export default function Home() {
             />
           )}
 
-          <a
-            href={currentFolderFiles[lightboxIndex].downloadUrl || currentFolderFiles[lightboxIndex].url}
-            download
-            target="_blank"
-            rel="noopener noreferrer"
-            onClick={(e) => e.stopPropagation()}
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              downloadSingleFile(currentFolderFiles[lightboxIndex]);
+            }}
             style={{
               position: 'absolute', bottom: '20px', right: '20px', padding: '8px 16px',
-              background: '#6c63ff', color: 'white', borderRadius: '8px', textDecoration: 'none',
-              fontWeight: 600, fontSize: '14px'
+              background: '#6c63ff', color: 'white', borderRadius: '8px', border: 'none',
+              fontWeight: 600, fontSize: '14px', cursor: 'pointer'
             }}
           >
             ⬇ Download
-          </a>
+          </button>
         </div>
       )}
 
@@ -340,7 +646,7 @@ export default function Home() {
         <div style={{
           position: 'fixed', bottom: '24px', left: '50%', transform: 'translateX(-50%)',
           background: '#4caf50', color: 'white', padding: '12px 24px', borderRadius: '8px',
-          fontSize: '14px', fontWeight: 600, zIndex: 300, boxShadow: '0 4px 12px rgba(0,0,0,0.5)'
+          fontSize: '14px', fontWeight: 600, zIndex: 400, boxShadow: '0 4px 12px rgba(0,0,0,0.5)'
         }}>
           {toast}
         </div>
@@ -352,6 +658,11 @@ export default function Home() {
 const btnGhost = {
   background: 'transparent', color: '#888', border: '1px solid #333',
   padding: '6px 12px', borderRadius: '8px', fontSize: '12px', fontWeight: 600, cursor: 'pointer'
+};
+
+const btnPrimary = {
+  background: '#6c63ff', color: 'white', border: 'none',
+  padding: '7px 14px', borderRadius: '8px', fontSize: '13px', fontWeight: 600, cursor: 'pointer'
 };
 
 const btnDanger = {
