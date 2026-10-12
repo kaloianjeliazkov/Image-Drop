@@ -34,6 +34,21 @@ export default function Home() {
     setTimeout(() => setToast(''), 3500);
   };
 
+  // Initialize from localStorage once on client
+  useEffect(() => {
+    const saved = localStorage.getItem('image_drop_last_folder');
+    if (saved) {
+      setCurrentFolder(saved);
+      setFolderInput(saved);
+    }
+  }, []);
+
+  const selectFolder = (name) => {
+    setCurrentFolder(name);
+    setFolderInput(name);
+    localStorage.setItem('image_drop_last_folder', name);
+  };
+
   const loadFiles = async () => {
     try {
       const res = await fetch('/api/files');
@@ -54,9 +69,11 @@ export default function Home() {
       })).sort((a, b) => a.name.localeCompare(b.name));
 
       setFolders(uniqueFolders);
-      if (uniqueFolders.length > 0 && !uniqueFolders.some(f => f.name === currentFolder)) {
-        setCurrentFolder(uniqueFolders[0].name);
-        setFolderInput(uniqueFolders[0].name);
+
+      // Do NOT overwrite user-selected folder. Only pick one if none was ever selected
+      if (!currentFolder && uniqueFolders.length > 0) {
+        const target = localStorage.getItem('image_drop_last_folder') || uniqueFolders[0].name;
+        selectFolder(target);
       }
     } catch (err) {
       console.error(err);
@@ -398,10 +415,7 @@ export default function Home() {
             {folders.map(f => (
               <button
                 key={f.name}
-                onClick={() => {
-                  setCurrentFolder(f.name);
-                  setFolderInput(f.name);
-                }}
+                onClick={() => selectFolder(f.name)}
                 style={{
                   padding: '8px 16px', borderRadius: '20px', fontSize: '13px', cursor: 'pointer',
                   border: currentFolder === f.name ? '1px solid #6c63ff' : '1px solid #333',
