@@ -213,6 +213,38 @@ export default function Home() {
     setZipProgress('');
   };
 
+  // Download files as separate individual files directly
+  const downloadAsIndividualFiles = async (filesToDownload) => {
+    if (filesToDownload.length === 0) return;
+    setIsZipping(true);
+    setZipProgress(`Downloading 0/${filesToDownload.length} files...`);
+
+    let savedCount = 0;
+    for (let i = 0; i < filesToDownload.length; i++) {
+      const file = filesToDownload[i];
+      setZipProgress(`Downloading ${i + 1}/${filesToDownload.length}: ${file.name}...`);
+      try {
+        const resp = await fetch(file.url);
+        const blob = await resp.blob();
+        const savedDirect = await saveFileToDirectory(file.name, blob);
+        if (!savedDirect) {
+          saveAs(blob, file.name);
+        }
+        savedCount++;
+        // Small delay between browser downloads if not using direct directory handle
+        if (!customDirHandle) {
+          await new Promise(r => setTimeout(r, 350));
+        }
+      } catch (e) {
+        console.error(`Failed to download ${file.name}`, e);
+      }
+    }
+
+    setIsZipping(false);
+    setZipProgress('');
+    showToast(`✓ Downloaded ${savedCount} file(s) individually!`);
+  };
+
   // Delete selected files
   const handleDeleteSelected = async () => {
     if (selectedUrls.size === 0) return;
@@ -405,28 +437,44 @@ export default function Home() {
               </span>
             </div>
 
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
               {selectedUrls.size > 0 ? (
                 <>
                   <button
-                    onClick={() => downloadAsZip(currentFolderFiles.filter(f => selectedUrls.has(f.url)), `${currentFolder}_selected`)}
+                    onClick={() => downloadAsIndividualFiles(currentFolderFiles.filter(f => selectedUrls.has(f.url)))}
                     disabled={isZipping}
                     style={btnPrimary}
                   >
                     ⬇ Download Selected ({selectedUrls.size})
+                  </button>
+                  <button
+                    onClick={() => downloadAsZip(currentFolderFiles.filter(f => selectedUrls.has(f.url)), `${currentFolder}_selected`)}
+                    disabled={isZipping}
+                    style={btnGhost}
+                  >
+                    📦 as ZIP
                   </button>
                   <button onClick={handleDeleteSelected} style={btnDanger}>
                     🗑 Delete Selected
                   </button>
                 </>
               ) : (
-                <button
-                  onClick={() => downloadAsZip(currentFolderFiles, currentFolder)}
-                  disabled={isZipping}
-                  style={btnPrimary}
-                >
-                  📦 Download Folder ({currentFolder}) as ZIP
-                </button>
+                <>
+                  <button
+                    onClick={() => downloadAsIndividualFiles(currentFolderFiles)}
+                    disabled={isZipping}
+                    style={btnPrimary}
+                  >
+                    ⬇ Download All Files ({currentFolderFiles.length})
+                  </button>
+                  <button
+                    onClick={() => downloadAsZip(currentFolderFiles, currentFolder)}
+                    disabled={isZipping}
+                    style={btnGhost}
+                  >
+                    📦 as ZIP
+                  </button>
+                </>
               )}
             </div>
           </div>
