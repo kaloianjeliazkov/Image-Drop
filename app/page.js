@@ -73,9 +73,9 @@ export default function Home() {
     });
   };
 
-  const loadFiles = async () => {
+  const loadFiles = async (forceFresh = false) => {
     try {
-      const res = await fetch('/api/files');
+      const res = await fetch(`/api/files${forceFresh ? '?fresh=1' : ''}`);
       if (!res.ok) throw new Error('Failed to fetch');
       const data = await res.json();
       const loaded = data.files || [];
@@ -113,8 +113,24 @@ export default function Home() {
 
   useEffect(() => {
     loadFiles();
-    const timer = setInterval(loadFiles, 12000);
-    return () => clearInterval(timer);
+
+    // Refresh ONLY when user switches back to the tab/app (saves operations!)
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        loadFiles(true);
+      }
+    };
+    window.addEventListener('visibilitychange', handleVisibility);
+    window.addEventListener('focus', handleVisibility);
+
+    // Light background poll every 60s instead of 12s
+    const timer = setInterval(() => loadFiles(false), 60000);
+
+    return () => {
+      window.removeEventListener('visibilitychange', handleVisibility);
+      window.removeEventListener('focus', handleVisibility);
+      clearInterval(timer);
+    };
   }, [currentFolder]);
 
   // Clear selections when switching folder
