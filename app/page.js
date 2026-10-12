@@ -25,11 +25,11 @@ export default function Home() {
   const [editName, setEditName] = useState('');
   const [annotations, setAnnotations] = useState([]);
   const [tempArrow, setTempArrow] = useState(null);
-  const [editTool, setEditTool] = useState('text');
+  const [editTool, setEditTool] = useState('arrow');
   const [textDraft, setTextDraft] = useState(null);
   const canvasRef = useRef(null);
   const editImageRef = useRef(null);
-  const arrowStartRef = useRef(null);
+  const arrowRef = useRef(null);
   const dragAnnRef = useRef(null);
   
   // Multi-select & Batch features
@@ -46,6 +46,8 @@ export default function Home() {
   const [knownFolders, setKnownFolders] = useState([]);
 
   const fileInputRef = useRef(null);
+  const lastChangeRef = useRef(0);
+  const loadSeqRef = useRef(0);
 
   const showToast = (msg) => {
     setToast(msg);
@@ -85,11 +87,16 @@ export default function Home() {
   };
 
   const loadFiles = async (forceFresh = false) => {
+    // The API caches the list for 20s, so skip that cache for a while after we changed files
+    const fresh = forceFresh || Date.now() - lastChangeRef.current < 20000;
+    const seq = ++loadSeqRef.current;
     setIsRefreshing(true);
     try {
-      const res = await fetch(`/api/files${forceFresh ? '?fresh=1' : ''}`);
+      const res = await fetch(`/api/files${fresh ? '?fresh=1' : ''}`);
       if (!res.ok) throw new Error('Failed to fetch');
       const data = await res.json();
+      // A newer refresh started meanwhile (e.g. the folder switch after an upload); let that one win
+      if (seq !== loadSeqRef.current) return;
       const loaded = data.files || [];
       setFiles(loaded);
 
@@ -138,8 +145,14 @@ export default function Home() {
     } catch (err) {
       console.error(err);
     } finally {
-      setIsRefreshing(false);
+      if (seq === loadSeqRef.current) setIsRefreshing(false);
     }
+  };
+
+  // Reload after uploading or deleting, bypassing the server's (now stale) list cache
+  const refreshAfterChange = () => {
+    lastChangeRef.current = Date.now();
+    loadFiles(true);
   };
 
   useEffect(() => {
@@ -186,7 +199,7 @@ export default function Home() {
     if (successCount > 0) {
       showToast(`✓ Uploaded ${successCount} file(s)!`);
       setCurrentFolder(folder);
-      loadFiles();
+      refreshAfterChange();
     }
   };
 
@@ -344,7 +357,7 @@ export default function Home() {
         body: JSON.stringify({ urls }),
       });
       setSelectedUrls(new Set());
-      loadFiles();
+      refreshAfterChange();
       showToast('🧹 Cleaned up downloaded files');
     } catch (e) {
       console.warn('Failed auto-delete cleanup:', e);
@@ -364,7 +377,7 @@ export default function Home() {
       });
       showToast(`Deleted ${selectedUrls.size} files`);
       setSelectedUrls(new Set());
-      loadFiles();
+      refreshAfterChange();
     } catch (err) {
       showToast('Delete failed');
     }
@@ -380,7 +393,7 @@ export default function Home() {
         body: JSON.stringify({ url }),
       });
       showToast('Deleted file');
-      loadFiles();
+      refreshAfterChange();
     } catch (err) {
       showToast('Delete failed');
     }
@@ -424,7 +437,7 @@ export default function Home() {
       }
 
       showToast(`Deleted folder "${folderName}"`);
-      loadFiles();
+      refreshAfterChange();
     } catch (err) {
       showToast('Failed to delete folder');
     }
@@ -441,7 +454,7 @@ export default function Home() {
       });
       showToast('All files cleared');
       setSelectedUrls(new Set());
-      loadFiles();
+      refreshAfterChange();
     } catch (err) {
       showToast('Clear failed');
     }
@@ -471,15 +484,17 @@ export default function Home() {
     setAnnotations([]);
     setTempArrow(null);
     setTextDraft(null);
-    setEditTool('text');
+    setEditTool('arrow');
   };
 
+  // Pointer position in canvas pixels, clamped to the image so drags can't leave it
   const canvasPos = (e) => {
     const canvas = canvasRef.current;
     const rect = canvas.getBoundingClientRect();
+    const clamp = (v, max) => Math.max(0, Math.min(max, v));
     return {
-      x: (e.clientX - rect.left) * (canvas.width / rect.width),
-      y: (e.clientY - rect.top) * (canvas.height / rect.height)
+      x: clamp((e.clientX - rect.left) * (canvas.width / rect.width), canvas.width),
+      y: clamp((e.clientY - rect.top) * (canvas.height / rect.height), canvas.height)
     };
   };
 
@@ -493,28 +508,44 @@ export default function Home() {
     const drawOne = (a) => {
       if (a.type === 'text') {
         ctx.font = 'bold 32px sans-serif';
+        ctx.textBaseline = 'middle'; // (x, y) is the left middle of the text, where the text field sat
         ctx.lineWidth = 6;
+        ctx.lineJoin = 'round';
         ctx.strokeStyle = 'rgba(0,0,0,0.85)';
         ctx.fillStyle = '#ffffff';
         ctx.strokeText(a.text, a.x, a.y);
         ctx.fillText(a.text, a.x, a.y);
       } else {
-        ctx.strokeStyle = '#ff3b30';
-        ctx.fillStyle = '#ff3b30';
-        ctx.lineWidth = 5;
-        ctx.lineCap = 'round';
-        ctx.beginPath();
-        ctx.moveTo(a.x1, a.y1);
-        ctx.lineTo(a.x2, a.y2);
-        ctx.stroke();
         const angle = Math.atan2(a.y2 - a.y1, a.x2 - a.x1);
-        const head = 16;
-        ctx.beginPath();
-        ctx.moveTo(a.x2, a.y2);
-        ctx.lineTo(a.x2 - head * Math.cos(angle - Math.PI / 6), a.y2 - head * Math.sin(angle - Math.PI / 6));
-        ctx.lineTo(a.x2 - head * Math.cos(angle + Math.PI / 6), a.y2 - head * Math.sin(angle + Math.PI / 6));
-        ctx.closePath();
-        ctx.fill();
+        const head = 22;
+        const spread = Math.PI / 7;
+        // End the shaft inside the head so its round cap doesn't blunt the tip
+        const shaftX = a.x2 - head * 0.8 * Math.cos(angle);
+        const shaftY = a.y2 - head * 0.8 * Math.sin(angle);
+        const drawArrow = (color, outline) => {
+          ctx.strokeStyle = color;
+          ctx.fillStyle = color;
+          ctx.lineCap = 'round';
+          ctx.lineJoin = 'round';
+          ctx.lineWidth = 5 + outline;
+          ctx.beginPath();
+          ctx.moveTo(a.x1, a.y1);
+          ctx.lineTo(shaftX, shaftY);
+          ctx.stroke();
+          ctx.beginPath();
+          ctx.moveTo(a.x2, a.y2);
+          ctx.lineTo(a.x2 - head * Math.cos(angle - spread), a.y2 - head * Math.sin(angle - spread));
+          ctx.lineTo(a.x2 - head * Math.cos(angle + spread), a.y2 - head * Math.sin(angle + spread));
+          ctx.closePath();
+          ctx.fill();
+          if (outline) {
+            ctx.lineWidth = outline;
+            ctx.stroke();
+          }
+        };
+        // Dark edge first (like the text outline) so the arrow shows up on red or busy screenshots
+        drawArrow('rgba(0,0,0,0.55)', 3);
+        drawArrow('#ff3b30', 0);
       }
     };
     annotations.forEach(drawOne);
@@ -574,13 +605,19 @@ export default function Home() {
         if (distToSegment(p, { x: a.x1, y: a.y1 }, { x: a.x2, y: a.y2 }) <= 12) return i;
       } else {
         const w = ctx.measureText(a.text).width;
-        if (p.x >= a.x - 10 && p.x <= a.x + w + 10 && p.y >= a.y - 34 && p.y <= a.y + 12) return i;
+        if (p.x >= a.x - 10 && p.x <= a.x + w + 10 && p.y >= a.y - 22 && p.y <= a.y + 22) return i;
       }
     }
     return -1;
   };
 
-  const onCanvasMouseDown = (e) => {
+  const onCanvasPointerDown = (e) => {
+    if (e.button !== 0) return;
+    // A click while a text field is open just places that text
+    if (textDraft) {
+      commitTextDraft();
+      return;
+    }
     const p = canvasPos(e);
     const idx = findAnnotationAt(p);
     if (idx >= 0) {
@@ -589,13 +626,16 @@ export default function Home() {
       const anchor = a.type === 'arrow' ? { x: a.x1, y: a.y1 } : { x: a.x, y: a.y };
       dragAnnRef.current = { index: idx, dx: p.x - anchor.x, dy: p.y - anchor.y };
     } else if (editTool === 'arrow') {
-      arrowStartRef.current = p;
-    } else if (editTool === 'text') {
+      arrowRef.current = { x1: p.x, y1: p.y, x2: p.x, y2: p.y };
+    } else {
       setTextDraft({ x: p.x, y: p.y, value: '' });
+      return;
     }
+    // Keep getting moves and the release even if the pointer leaves the canvas mid-drag
+    e.currentTarget.setPointerCapture(e.pointerId);
   };
 
-  const onCanvasMouseMove = (e) => {
+  const onCanvasPointerMove = (e) => {
     if (dragAnnRef.current) {
       const p = canvasPos(e);
       const { index, dx, dy } = dragAnnRef.current;
@@ -611,19 +651,23 @@ export default function Home() {
         }
         return { ...a, x: p.x - dx, y: p.y - dy };
       }));
-    } else if (editTool === 'arrow' && arrowStartRef.current) {
+    } else if (arrowRef.current) {
       const p = canvasPos(e);
-      setTempArrow({ x1: arrowStartRef.current.x, y1: arrowStartRef.current.y, x2: p.x, y2: p.y });
+      arrowRef.current = { ...arrowRef.current, x2: p.x, y2: p.y };
+      setTempArrow(arrowRef.current);
     }
   };
 
-  const onCanvasMouseUp = () => {
-    if (tempArrow) {
-      setAnnotations(prev => [...prev, { type: 'arrow', ...tempArrow }]);
-      setTempArrow(null);
+  const onCanvasPointerUp = () => {
+    // Read the arrow from the ref, not tempArrow state: on a quick flick the release arrives
+    // before React re-renders with the last move, and the arrow used to be dropped
+    const arrow = arrowRef.current;
+    if (arrow && Math.hypot(arrow.x2 - arrow.x1, arrow.y2 - arrow.y1) >= 8) {
+      setAnnotations(prev => [...prev, { type: 'arrow', ...arrow }]);
     }
-    arrowStartRef.current = null;
+    arrowRef.current = null;
     dragAnnRef.current = null;
+    setTempArrow(null);
   };
 
   const commitTextDraft = () => {
@@ -631,17 +675,6 @@ export default function Home() {
       setAnnotations(prev => [...prev, { type: 'text', x: textDraft.x, y: textDraft.y, text: textDraft.value.trim() }]);
     }
     setTextDraft(null);
-  };
-
-  // Scale factor between canvas attribute size and displayed size
-  const canvasScale = () => {
-    const canvas = canvasRef.current;
-    if (!canvas) return { x: 1, y: 1 };
-    const rect = canvas.getBoundingClientRect();
-    return {
-      x: rect.width / canvas.width,
-      y: rect.height / canvas.height
-    };
   };
 
   const saveEditedImage = async () => {
@@ -661,7 +694,7 @@ export default function Home() {
       showToast(`✓ Saved to "${folder}"`);
       setEditingFile(null);
       setCurrentFolder(folder);
-      loadFiles(true);
+      refreshAfterChange();
     } catch (err) {
       console.error('Edit save error:', err);
       showToast(`❌ Save failed: ${err.message || 'Upload failed'}`);
@@ -1126,21 +1159,21 @@ export default function Home() {
 
             <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap', marginBottom: '12px' }}>
               <button
-                onClick={() => setEditTool('text')}
-                style={editTool === 'text' ? btnPrimary : btnGhost}
-                title="Click on the image to add text"
-              >
-                🅣 Add text
-              </button>
-              <button
                 onClick={() => setEditTool('arrow')}
                 style={editTool === 'arrow' ? btnPrimary : btnGhost}
                 title="Drag on the image to draw an arrow"
               >
                 ↗️ Add arrow
               </button>
+              <button
+                onClick={() => setEditTool('text')}
+                style={editTool === 'text' ? btnPrimary : btnGhost}
+                title="Click on the image to add text"
+              >
+                🅣 Add text
+              </button>
               <span style={{ fontSize: '12px', color: '#888' }}>
-                {editTool === 'text' ? 'Click the image to place text' : 'Drag on the image to draw an arrow'}
+                {editTool === 'arrow' ? 'Drag on the image to draw an arrow' : 'Click the image to place text'}
                 {' • '}drag any text or arrow to move it
               </span>
             </div>
@@ -1157,14 +1190,16 @@ export default function Home() {
               <div style={{ position: 'relative', display: 'inline-block', maxWidth: '100%' }}>
                 <canvas
                   ref={canvasRef}
-                  onMouseDown={onCanvasMouseDown}
-                  onMouseMove={onCanvasMouseMove}
-                  onMouseUp={onCanvasMouseUp}
-                  onMouseLeave={onCanvasMouseUp}
-                  style={{ display: 'block', maxWidth: '100%', maxHeight: 'calc(96vh - 300px)', width: 'auto', height: 'auto', borderRadius: '8px', cursor: editTool === 'text' ? 'text' : 'crosshair', background: '#000' }}
+                  onPointerDown={onCanvasPointerDown}
+                  onPointerMove={onCanvasPointerMove}
+                  onPointerUp={onCanvasPointerUp}
+                  onPointerCancel={onCanvasPointerUp}
+                  // Stop the browser moving focus off the text field we just opened (and selecting page text while dragging)
+                  onMouseDown={(e) => e.preventDefault()}
+                  style={{ display: 'block', maxWidth: '100%', maxHeight: 'calc(96vh - 300px)', width: 'auto', height: 'auto', borderRadius: '8px', cursor: editTool === 'text' ? 'text' : 'crosshair', background: '#000', touchAction: 'none' }}
                 />
                 {textDraft && (() => {
-                  const s = canvasScale();
+                  const canvas = canvasRef.current;
                   return (
                     <input
                       autoFocus
@@ -1178,9 +1213,10 @@ export default function Home() {
                       placeholder="Type text, Enter to place"
                       style={{
                         position: 'absolute',
-                        left: textDraft.x * s.x,
-                        top: textDraft.y * s.y,
-                        transform: 'translate(-50%, -50%)',
+                        // The wrapper is exactly the canvas, so canvas coords map to percentages
+                        left: `${(textDraft.x / canvas.width) * 100}%`,
+                        top: `${(textDraft.y / canvas.height) * 100}%`,
+                        transform: 'translateY(-50%)',
                         background: 'rgba(0,0,0,0.9)',
                         color: '#fff',
                         border: '1px solid #6c63ff',
