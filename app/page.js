@@ -21,11 +21,13 @@ export default function Home() {
   const [isZipping, setIsZipping] = useState(false);
   const [zipProgress, setZipProgress] = useState('');
   
-  // Settings Modal & Directory Handle (File System Access API)
+  // Settings & options
   const [showSettings, setShowSettings] = useState(false);
   const [customDirHandle, setCustomDirHandle] = useState(null);
   const [customDirName, setCustomDirName] = useState('');
   const [autoSaveDirect, setAutoSaveDirect] = useState(false);
+  const [deleteAfterDownload, setDeleteAfterDownload] = useState(false);
+  const [knownFolders, setKnownFolders] = useState(['general']);
 
   const fileInputRef = useRef(null);
 
@@ -41,12 +43,34 @@ export default function Home() {
       setCurrentFolder(saved);
       setFolderInput(saved);
     }
+    const savedDeleteSetting = localStorage.getItem('image_drop_delete_after_download');
+    if (savedDeleteSetting !== null) {
+      setDeleteAfterDownload(savedDeleteSetting === 'true');
+    }
+    const savedKnownFolders = localStorage.getItem('image_drop_known_folders');
+    if (savedKnownFolders) {
+      try {
+        const parsed = JSON.parse(savedKnownFolders);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          setKnownFolders(parsed);
+        }
+      } catch (e) {}
+    }
   }, []);
 
   const selectFolder = (name) => {
     setCurrentFolder(name);
     setFolderInput(name);
     localStorage.setItem('image_drop_last_folder', name);
+    // Remember folder in known list so empty folders remain visible
+    setKnownFolders(prev => {
+      if (!prev.includes(name)) {
+        const updated = [...prev, name];
+        localStorage.setItem('image_drop_known_folders', JSON.stringify(updated));
+        return updated;
+      }
+      return prev;
+    });
   };
 
   const loadFiles = async () => {
@@ -57,22 +81,29 @@ export default function Home() {
       const loaded = data.files || [];
       setFiles(loaded);
 
-      // Extract unique folders
+      // Extract unique folders from uploaded files
       const folderMap = {};
       loaded.forEach(f => {
         const fold = f.folder || 'general';
         folderMap[fold] = (folderMap[fold] || 0) + 1;
       });
-      const uniqueFolders = Object.keys(folderMap).map(name => ({
-        name,
-        count: folderMap[name]
-      })).sort((a, b) => a.name.localeCompare(b.name));
 
-      setFolders(uniqueFolders);
+      // Merge with known folders so empty folders remain visible
+      setKnownFolders(prev => {
+        const combined = Array.from(new Set([...prev, ...Object.keys(folderMap), currentFolder || 'general']));
+        localStorage.setItem('image_drop_known_folders', JSON.stringify(combined));
 
-      // Do NOT overwrite user-selected folder. Only pick one if none was ever selected
-      if (!currentFolder && uniqueFolders.length > 0) {
-        const target = localStorage.getItem('image_drop_last_folder') || uniqueFolders[0].name;
+        const folderList = combined.map(name => ({
+          name,
+          count: folderMap[name] || 0
+        })).sort((a, b) => a.name.localeCompare(b.name));
+
+        setFolders(folderList);
+        return combined;
+      });
+
+      if (!currentFolder) {
+        const target = localStorage.getItem('image_drop_last_folder') || 'general';
         selectFolder(target);
       }
     } catch (err) {
@@ -221,6 +252,12 @@ export default function Home() {
         saveAs(zipContent, finalName);
         showToast(`✓ Downloaded ${finalName}`);
       }
+
+      // Auto delete if option enabled
+      if (deleteAfterDownload) {
+        const urlsToDelete = filesToDownload.map(f => f.url);
+        await deleteFilesSilently(urlsToDelete);
+      }
     } catch (err) {
       console.error(err);
       showToast(`❌ Error creating ZIP: ${err.message}`);
@@ -237,6 +274,7 @@ export default function Home() {
     setZipProgress(`Downloading 0/${filesToDownload.length} files...`);
 
     let savedCount = 0;
+    const downloadedUrls = [];
     for (let i = 0; i < filesToDownload.length; i++) {
       const file = filesToDownload[i];
       setZipProgress(`Downloading ${i + 1}/${filesToDownload.length}: ${file.name}...`);
@@ -248,6 +286,7 @@ export default function Home() {
           saveAs(blob, file.name);
         }
         savedCount++;
+        downloadedUrls.push(file.url);
         // Small delay between browser downloads if not using direct directory handle
         if (!customDirHandle) {
           await new Promise(r => setTimeout(r, 350));
@@ -260,6 +299,27 @@ export default function Home() {
     setIsZipping(false);
     setZipProgress('');
     showToast(`✓ Downloaded ${savedCount} file(s) individually!`);
+
+    // Auto delete if option enabled
+    if (deleteAfterDownload && downloadedUrls.length > 0) {
+      await deleteFilesSilently(downloadedUrls);
+    }
+  };
+
+  // Silently delete files from blob store (for auto-delete on download)
+  const deleteFilesSilently = async (urls) => {
+    try {
+      await fetch('/api/files', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ urls }),
+      });
+      setSelectedUrls(new Set());
+      loadFiles();
+      showToast('🧹 Cleaned up downloaded files');
+    } catch (e) {
+      console.warn('Failed auto-delete cleanup:', e);
+    }
   };
 
   // Delete selected files
@@ -635,6 +695,30 @@ export default function Home() {
               <button onClick={handlePickDirectory} style={btnPrimary}>
                 📁 {customDirName ? 'Change Folder' : 'Choose Download Folder'}
               </button>
+
+              <hr style={{ border: 'none', borderTop: '1px solid #333', margin: '20px 0' }} />
+
+              <div>
+                <label style={{ display: 'flex', alignItems: 'center', gap: '10px', cursor: 'pointer', userSelect: 'none' }}>
+                  <input
+                    type="checkbox"
+                    checked={deleteAfterDownload}
+                    onChange={(e) => {
+                      const val = e.target.checked;
+                      setDeleteAfterDownload(val);
+                      localStorage.setItem('image_drop_delete_after_download', val.toString());
+                      showToast(val ? 'Auto-delete after download enabled' : 'Auto-delete after download disabled');
+                    }}
+                    style={{ width: '18px', height: '18px', cursor: 'pointer' }}
+                  />
+                  <span>
+                    <strong>Auto-delete after download:</strong>
+                    <div style={{ fontSize: '12px', color: '#888', marginTop: '2px' }}>
+                      Automatically remove files from cloud storage once downloaded to keep storage clean.
+                    </div>
+                  </span>
+                </label>
+              </div>
 
               <hr style={{ border: 'none', borderTop: '1px solid #333', margin: '20px 0' }} />
 
