@@ -1,6 +1,5 @@
 import { handleUpload } from '@vercel/blob/client';
 import { NextResponse } from 'next/server';
-import { addFoldersToRegistry, sanitizeFolderName } from '../../../lib/folderRegistry';
 
 export async function POST(request) {
   const body = await request.json();
@@ -15,14 +14,7 @@ export async function POST(request) {
         };
       },
       onUploadCompleted: async ({ blob, tokenPayload }) => {
-        // Register the folder server-side so the folder tab stays visible on
-        // every device, including iOS home screen bookmarks
-        try {
-          const folder = sanitizeFolderName(blob.pathname.split('/')[0]);
-          await addFoldersToRegistry([folder]);
-        } catch (e) {
-          console.error('Failed to register upload folder:', e);
-        }
+        // Upload finished
       },
     });
 

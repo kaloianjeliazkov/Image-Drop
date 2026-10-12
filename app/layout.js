@@ -6,13 +6,6 @@ export const metadata = {
     shortcut: '/icon.svg',
     apple: '/icon.svg',
   },
-  // Make home screen bookmarks behave like a standalone app on iOS/Android
-  appleWebApp: {
-    capable: true,
-    statusBarStyle: 'black-translucent',
-    title: 'Image Drop',
-  },
-  mobileWebAppCapable: true,
 };
 
 export const viewport = {
