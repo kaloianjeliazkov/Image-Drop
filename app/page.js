@@ -81,14 +81,17 @@ export default function Home() {
         setUploadProgress(Math.round(((i + 1) / total) * 100));
       } catch (err) {
         console.error('Upload error:', err);
+        showToast(`❌ Error: ${err.message || 'Upload failed'}`);
       }
     }
 
     setIsUploading(false);
     if (fileInputRef.current) fileInputRef.current.value = '';
-    showToast(`✓ Uploaded ${successCount} file(s)!`);
-    setCurrentFolder(folder);
-    loadFiles();
+    if (successCount > 0) {
+      showToast(`✓ Uploaded ${successCount} file(s)!`);
+      setCurrentFolder(folder);
+      loadFiles();
+    }
   };
 
   const handleDelete = async (url) => {

@@ -10,15 +10,11 @@ export async function POST(request) {
       request,
       onBeforeGenerateToken: async (pathname) => {
         return {
-          allowedContentTypes: [
-            'image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/heic', 'image/svg+xml',
-            'video/mp4', 'video/quicktime', 'video/webm', 'video/x-matroska'
-          ],
-          maximumSizeInBytes: 250 * 1024 * 1024, // 250 MB max per file
+          maximumSizeInBytes: 250 * 1024 * 1024, // 250 MB
         };
       },
       onUploadCompleted: async ({ blob, tokenPayload }) => {
-        // Blob upload finished
+        // Upload finished
       },
     });
 
