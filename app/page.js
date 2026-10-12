@@ -8,8 +8,8 @@ import { saveAs } from 'file-saver';
 export default function Home() {
   const [files, setFiles] = useState([]);
   const [folders, setFolders] = useState([]);
-  const [currentFolder, setCurrentFolder] = useState('general');
-  const [folderInput, setFolderInput] = useState('general');
+  const [currentFolder, setCurrentFolder] = useState('');
+  const [folderInput, setFolderInput] = useState('');
   const [isUploading, setIsUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [uploadStatus, setUploadStatus] = useState('');
@@ -27,7 +27,7 @@ export default function Home() {
   const [customDirName, setCustomDirName] = useState('');
   const [autoSaveDirect, setAutoSaveDirect] = useState(false);
   const [deleteAfterDownload, setDeleteAfterDownload] = useState(false);
-  const [knownFolders, setKnownFolders] = useState(['general']);
+  const [knownFolders, setKnownFolders] = useState([]);
 
   const fileInputRef = useRef(null);
 
@@ -59,6 +59,7 @@ export default function Home() {
   }, []);
 
   const selectFolder = (name) => {
+    if (!name) return;
     setCurrentFolder(name);
     setFolderInput(name);
     localStorage.setItem('image_drop_last_folder', name);
@@ -84,13 +85,14 @@ export default function Home() {
       // Extract unique folders from uploaded files
       const folderMap = {};
       loaded.forEach(f => {
-        const fold = f.folder || 'general';
-        folderMap[fold] = (folderMap[fold] || 0) + 1;
+        if (f.folder) {
+          folderMap[f.folder] = (folderMap[f.folder] || 0) + 1;
+        }
       });
 
       // Merge with known folders so empty folders remain visible
       setKnownFolders(prev => {
-        const combined = Array.from(new Set([...prev, ...Object.keys(folderMap), currentFolder || 'general']));
+        const combined = Array.from(new Set([...prev, ...Object.keys(folderMap)]));
         localStorage.setItem('image_drop_known_folders', JSON.stringify(combined));
 
         const folderList = combined.map(name => ({
@@ -99,13 +101,19 @@ export default function Home() {
         })).sort((a, b) => a.name.localeCompare(b.name));
 
         setFolders(folderList);
+
+        // Auto select first available folder if none selected
+        if (!currentFolder && folderList.length > 0) {
+          const savedLast = localStorage.getItem('image_drop_last_folder');
+          const toSelect = (savedLast && folderList.some(f => f.name === savedLast))
+            ? savedLast
+            : folderList[0].name;
+          setCurrentFolder(toSelect);
+          setFolderInput(toSelect);
+        }
+
         return combined;
       });
-
-      if (!currentFolder) {
-        const target = localStorage.getItem('image_drop_last_folder') || 'general';
-        selectFolder(target);
-      }
     } catch (err) {
       console.error(err);
     }
@@ -371,17 +379,24 @@ export default function Home() {
       }
 
       // Remove from known folders list in state & localStorage
+      let updatedFolders = [];
       setKnownFolders(prev => {
         const remaining = prev.filter(name => name !== folderName);
-        const updated = remaining.length > 0 ? remaining : ['general'];
-        localStorage.setItem('image_drop_known_folders', JSON.stringify(updated));
-        return updated;
+        updatedFolders = remaining;
+        localStorage.setItem('image_drop_known_folders', JSON.stringify(remaining));
+        return remaining;
       });
 
-      // If active folder is deleted, switch to another folder or general
+      // If active folder was deleted, switch to another existing folder or blank
       if (currentFolder === folderName) {
-        const nextFolder = knownFolders.find(name => name !== folderName) || 'general';
-        selectFolder(nextFolder);
+        const nextFolder = updatedFolders[0] || '';
+        setCurrentFolder(nextFolder);
+        setFolderInput(nextFolder);
+        if (nextFolder) {
+          localStorage.setItem('image_drop_last_folder', nextFolder);
+        } else {
+          localStorage.removeItem('image_drop_last_folder');
+        }
       }
 
       showToast(`Deleted folder "${folderName}"`);
@@ -453,7 +468,7 @@ export default function Home() {
             type="text"
             value={folderInput}
             onChange={(e) => setFolderInput(e.target.value)}
-            placeholder="general"
+            placeholder="Folder name (optional)"
             style={{
               background: '#252525', border: '1px solid #333', color: '#e8e8e8',
               padding: '8px 12px', borderRadius: '8px', fontSize: '14px', outline: 'none'
