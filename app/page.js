@@ -36,18 +36,31 @@ export default function Home() {
     setTimeout(() => setToast(''), 3500);
   };
 
+  // Safe localStorage access (Safari private mode / home screen web apps can throw)
+  const storage = {
+    get(key) {
+      try { return localStorage.getItem(key); } catch (e) { return null; }
+    },
+    set(key, value) {
+      try { localStorage.setItem(key, value); } catch (e) {}
+    },
+    remove(key) {
+      try { localStorage.removeItem(key); } catch (e) {}
+    }
+  };
+
   // Initialize from localStorage once on client
   useEffect(() => {
-    const saved = localStorage.getItem('image_drop_last_folder');
+    const saved = storage.get('image_drop_last_folder');
     if (saved) {
       setCurrentFolder(saved);
       setFolderInput(saved);
     }
-    const savedDeleteSetting = localStorage.getItem('image_drop_delete_after_download');
+    const savedDeleteSetting = storage.get('image_drop_delete_after_download');
     if (savedDeleteSetting !== null) {
       setDeleteAfterDownload(savedDeleteSetting === 'true');
     }
-    const savedKnownFolders = localStorage.getItem('image_drop_known_folders');
+    const savedKnownFolders = storage.get('image_drop_known_folders');
     if (savedKnownFolders) {
       try {
         const parsed = JSON.parse(savedKnownFolders);
@@ -58,16 +71,24 @@ export default function Home() {
     }
   }, []);
 
+  // Select a preset upload target (does not create the folder until first upload)
+  const selectUploadFolder = (name) => {
+    if (!name) return;
+    setCurrentFolder(name);
+    setFolderInput(name);
+    storage.set('image_drop_last_folder', name);
+  };
+
   const selectFolder = (name) => {
     if (!name) return;
     setCurrentFolder(name);
     setFolderInput(name);
-    localStorage.setItem('image_drop_last_folder', name);
+    storage.set('image_drop_last_folder', name);
     // Remember folder in known list so empty folders remain visible
     setKnownFolders(prev => {
       if (!prev.includes(name)) {
         const updated = [...prev, name];
-        localStorage.setItem('image_drop_known_folders', JSON.stringify(updated));
+        storage.set('image_drop_known_folders', JSON.stringify(updated));
         return updated;
       }
       return prev;
@@ -90,10 +111,14 @@ export default function Home() {
         }
       });
 
-      // Merge with known folders so empty folders remain visible
+      // Server-side folder registry keeps folders visible on every device,
+      // even in an iOS home screen bookmark where localStorage is empty
+      const serverFolders = (data.folders || []).map(f => (typeof f === 'string' ? f : f.name));
+
+      // Merge server registry + local memory + folders seen in the file list
       setKnownFolders(prev => {
-        const combined = Array.from(new Set([...prev, ...Object.keys(folderMap)]));
-        localStorage.setItem('image_drop_known_folders', JSON.stringify(combined));
+        const combined = Array.from(new Set([...prev, ...serverFolders, ...Object.keys(folderMap)]));
+        storage.set('image_drop_known_folders', JSON.stringify(combined));
 
         const folderList = combined.map(name => ({
           name,
@@ -104,7 +129,7 @@ export default function Home() {
 
         // Auto select first available folder if none selected
         if (!currentFolder && folderList.length > 0) {
-          const savedLast = localStorage.getItem('image_drop_last_folder');
+          const savedLast = storage.get('image_drop_last_folder');
           const toSelect = (savedLast && folderList.some(f => f.name === savedLast))
             ? savedLast
             : folderList[0].name;
@@ -133,7 +158,8 @@ export default function Home() {
     setIsUploading(true);
     setUploadProgress(0);
 
-    const folder = (folderInput.trim() || 'general').replace(/[^a-zA-Z0-9_-]/g, '_').substring(0, 50);
+    const sanitized = (folderInput.trim() || 'general').replace(/[^a-zA-Z0-9_-]/g, '_').replace(/^_+/, '').substring(0, 50);
+    const folder = sanitized || 'general';
     const total = fileList.length;
     let successCount = 0;
 
@@ -163,7 +189,7 @@ export default function Home() {
     if (successCount > 0) {
       showToast(`✓ Uploaded ${successCount} file(s)!`);
       setCurrentFolder(folder);
-      loadFiles();
+      loadFiles(true);
     }
   };
 
@@ -363,44 +389,39 @@ export default function Home() {
     }
   };
 
-  // Delete entire folder (all files inside + remove tab)
+  // Delete entire folder (all files inside + remove from server registry + tab)
   const handleDeleteFolder = async (folderName, e) => {
     if (e) e.stopPropagation();
     if (!confirm(`Delete folder "${folderName}" and all files inside?`)) return;
 
     try {
-      const folderFiles = files.filter(f => f.folder === folderName);
-      if (folderFiles.length > 0) {
-        await fetch('/api/files', {
-          method: 'DELETE',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ urls: folderFiles.map(f => f.url) }),
-        });
-      }
+      await fetch('/api/files', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ folder: folderName }),
+      });
 
-      // Remove from known folders list in state & localStorage
-      let updatedFolders = [];
+      // Remove from local known folders list too
       setKnownFolders(prev => {
         const remaining = prev.filter(name => name !== folderName);
-        updatedFolders = remaining;
-        localStorage.setItem('image_drop_known_folders', JSON.stringify(remaining));
+        storage.set('image_drop_known_folders', JSON.stringify(remaining));
         return remaining;
       });
 
       // If active folder was deleted, switch to another existing folder or blank
       if (currentFolder === folderName) {
-        const nextFolder = updatedFolders[0] || '';
+        const nextFolder = folders.map(f => f.name).filter(n => n !== folderName)[0] || '';
         setCurrentFolder(nextFolder);
         setFolderInput(nextFolder);
         if (nextFolder) {
-          localStorage.setItem('image_drop_last_folder', nextFolder);
+          storage.set('image_drop_last_folder', nextFolder);
         } else {
-          localStorage.removeItem('image_drop_last_folder');
+          storage.remove('image_drop_last_folder');
         }
       }
 
       showToast(`Deleted folder "${folderName}"`);
-      loadFiles();
+      loadFiles(true);
     } catch (err) {
       showToast('Failed to delete folder');
     }
@@ -409,15 +430,17 @@ export default function Home() {
   const handleClearAll = async () => {
     if (!confirm('Delete ALL files across all folders?')) return;
     try {
-      const urls = files.map(f => f.url);
       await fetch('/api/files', {
         method: 'DELETE',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ urls }),
+        body: JSON.stringify({ all: true }),
       });
+      storage.remove('image_drop_known_folders');
+      storage.remove('image_drop_last_folder');
+      setKnownFolders([]);
       showToast('All files cleared');
       setSelectedUrls(new Set());
-      loadFiles();
+      loadFiles(true);
     } catch (err) {
       showToast('Clear failed');
     }
@@ -463,17 +486,27 @@ export default function Home() {
       <main style={{ maxWidth: '1200px', margin: '0 auto', padding: '20px' }}>
         {/* Target Folder Selector */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '16px', flexWrap: 'wrap' }}>
-          <label style={{ fontSize: '14px', color: '#888', fontWeight: 600 }}>📂 Target Upload Folder:</label>
-          <input
-            type="text"
-            value={folderInput}
-            onChange={(e) => setFolderInput(e.target.value)}
-            placeholder="Folder name (optional)"
-            style={{
-              background: '#252525', border: '1px solid #333', color: '#e8e8e8',
-              padding: '8px 12px', borderRadius: '8px', fontSize: '14px', outline: 'none'
-            }}
-          />
+          <label style={{ fontSize: '14px', color: '#888', fontWeight: 600 }}>📂 Upload to:</label>
+          {[
+            { name: 'ios', icon: '📱' },
+            { name: 'android', icon: '🤖' },
+          ].map(preset => (
+            <button
+              key={preset.name}
+              onClick={() => selectUploadFolder(preset.name)}
+              title={`Upload to the "${preset.name}" folder`}
+              style={{
+                padding: '8px 16px', borderRadius: '20px', fontSize: '14px', fontWeight: 600,
+                cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px',
+                border: currentFolder === preset.name ? '1px solid #6c63ff' : '1px solid #333',
+                background: currentFolder === preset.name ? '#6c63ff' : '#1a1a1a',
+                color: currentFolder === preset.name ? '#fff' : '#e8e8e8',
+              }}
+            >
+              <span>{preset.icon}</span>
+              <span style={{ textTransform: 'capitalize' }}>{preset.name}</span>
+            </button>
+          ))}
         </div>
 
         {/* Upload Drop Zone */}
@@ -769,7 +802,7 @@ export default function Home() {
                     onChange={(e) => {
                       const val = e.target.checked;
                       setDeleteAfterDownload(val);
-                      localStorage.setItem('image_drop_delete_after_download', val.toString());
+                      storage.set('image_drop_delete_after_download', val.toString());
                       showToast(val ? 'Auto-delete after download enabled' : 'Auto-delete after download disabled');
                     }}
                     style={{ width: '18px', height: '18px', cursor: 'pointer' }}
