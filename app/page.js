@@ -518,7 +518,10 @@ export default function Home() {
       editImageRef.current = img;
       const canvas = canvasRef.current;
       if (!canvas) return;
-      const scale = Math.min(1, 1200 / img.width);
+      // Fit the image within the screen so no scrolling is needed
+      const maxW = Math.min(1200, window.innerWidth - 60);
+      const maxH = Math.max(200, window.innerHeight - 300); // room for header, tools, name, buttons
+      const scale = Math.min(1, maxW / img.width, maxH / img.height);
       canvas.width = Math.round(img.width * scale);
       canvas.height = Math.round(img.height * scale);
       redraw();
@@ -1033,8 +1036,8 @@ export default function Home() {
             onClick={(e) => e.stopPropagation()}
             style={{
               background: '#1e1e1e', border: '1px solid #333', borderRadius: '14px',
-              padding: '20px', maxWidth: '900px', width: '100%', color: '#e8e8e8',
-              maxHeight: '95vh', overflowY: 'auto'
+              padding: '16px', maxWidth: '96vw', width: '100%', color: '#e8e8e8',
+              maxHeight: '96vh', overflowY: 'auto', boxSizing: 'border-box'
             }}
           >
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
@@ -1077,7 +1080,7 @@ export default function Home() {
               onMouseMove={onCanvasMouseMove}
               onMouseUp={onCanvasMouseUp}
               onMouseLeave={onCanvasMouseUp}
-              style={{ display: 'block', maxWidth: '100%', borderRadius: '8px', cursor: editTool === 'text' ? 'text' : 'crosshair', background: '#000' }}
+              style={{ display: 'block', maxWidth: '100%', maxHeight: 'calc(96vh - 300px)', width: 'auto', height: 'auto', borderRadius: '8px', cursor: editTool === 'text' ? 'text' : 'crosshair', background: '#000' }}
             />
 
             <div style={{ display: 'flex', gap: '8px', marginTop: '14px', justifyContent: 'flex-end', flexWrap: 'wrap' }}>
