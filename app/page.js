@@ -355,6 +355,40 @@ export default function Home() {
     } catch (err) {
       showToast('Delete failed');
     }
+  // Delete entire folder (all files inside + remove tab)
+  const handleDeleteFolder = async (folderName, e) => {
+    if (e) e.stopPropagation();
+    if (!confirm(`Delete folder "${folderName}" and all files inside?`)) return;
+
+    try {
+      const folderFiles = files.filter(f => f.folder === folderName);
+      if (folderFiles.length > 0) {
+        await fetch('/api/files', {
+          method: 'DELETE',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ urls: folderFiles.map(f => f.url) }),
+        });
+      }
+
+      // Remove from known folders list in state & localStorage
+      setKnownFolders(prev => {
+        const remaining = prev.filter(name => name !== folderName);
+        const updated = remaining.length > 0 ? remaining : ['general'];
+        localStorage.setItem('image_drop_known_folders', JSON.stringify(updated));
+        return updated;
+      });
+
+      // If active folder is deleted, switch to another folder or general
+      if (currentFolder === folderName) {
+        const nextFolder = knownFolders.find(name => name !== folderName) || 'general';
+        selectFolder(nextFolder);
+      }
+
+      showToast(`Deleted folder "${folderName}"`);
+      loadFiles();
+    } catch (err) {
+      showToast('Failed to delete folder');
+    }
   };
 
   const handleClearAll = async () => {
@@ -473,24 +507,38 @@ export default function Home() {
         {folders.length > 0 && (
           <div style={{ display: 'flex', gap: '8px', marginBottom: '16px', flexWrap: 'wrap' }}>
             {folders.map(f => (
-              <button
+              <div
                 key={f.name}
                 onClick={() => selectFolder(f.name)}
                 style={{
-                  padding: '8px 16px', borderRadius: '20px', fontSize: '13px', cursor: 'pointer',
+                  padding: '6px 14px', borderRadius: '20px', fontSize: '13px', cursor: 'pointer',
                   border: currentFolder === f.name ? '1px solid #6c63ff' : '1px solid #333',
                   background: currentFolder === f.name ? '#6c63ff' : '#1a1a1a',
                   color: currentFolder === f.name ? '#fff' : '#888',
-                  display: 'flex', alignItems: 'center', gap: '6px'
+                  display: 'flex', alignItems: 'center', gap: '8px',
+                  userSelect: 'none'
                 }}
               >
-                📁 {f.name}
+                <span>📁 {f.name}</span>
                 <span style={{
                   background: 'rgba(255,255,255,0.2)', padding: '2px 7px', borderRadius: '10px', fontSize: '11px'
                 }}>
                   {f.count}
                 </span>
-              </button>
+                <button
+                  onClick={(e) => handleDeleteFolder(f.name, e)}
+                  title={`Delete folder "${f.name}"`}
+                  style={{
+                    background: 'none', border: 'none', color: 'inherit',
+                    opacity: 0.6, cursor: 'pointer', padding: '0 2px', fontSize: '14px',
+                    lineHeight: 1
+                  }}
+                  onMouseEnter={(e) => e.target.style.opacity = '1'}
+                  onMouseLeave={(e) => e.target.style.opacity = '0.6'}
+                >
+                  ✕
+                </button>
+              </div>
             ))}
           </div>
         )}
