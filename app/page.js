@@ -5,6 +5,9 @@ import { upload } from '@vercel/blob/client';
 import JSZip from 'jszip';
 import { saveAs } from 'file-saver';
 
+// Permanent folders: always visible as tabs and upload targets, even when empty
+const PERMANENT_FOLDERS = ['android', 'ios'];
+
 export default function Home() {
   const [files, setFiles] = useState([]);
   const [folders, setFolders] = useState([]);
@@ -74,6 +77,14 @@ export default function Home() {
     });
   };
 
+  // Select a permanent upload target
+  const selectUploadFolder = (name) => {
+    if (!name) return;
+    setCurrentFolder(name);
+    setFolderInput(name);
+    localStorage.setItem('image_drop_last_folder', name);
+  };
+
   const loadFiles = async (forceFresh = false) => {
     try {
       const res = await fetch(`/api/files${forceFresh ? '?fresh=1' : ''}`);
@@ -90,9 +101,9 @@ export default function Home() {
         }
       });
 
-      // Merge with known folders so empty folders remain visible
+      // Merge permanent + known folders + folders from files so android/ios always remain visible
       setKnownFolders(prev => {
-        const combined = Array.from(new Set([...prev, ...Object.keys(folderMap)]));
+        const combined = Array.from(new Set([...PERMANENT_FOLDERS, ...prev, ...Object.keys(folderMap)]));
         localStorage.setItem('image_drop_known_folders', JSON.stringify(combined));
 
         const folderList = combined.map(name => ({
@@ -366,6 +377,7 @@ export default function Home() {
   // Delete entire folder (all files inside + remove tab)
   const handleDeleteFolder = async (folderName, e) => {
     if (e) e.stopPropagation();
+    if (PERMANENT_FOLDERS.includes(folderName)) return; // android/ios are permanent
     if (!confirm(`Delete folder "${folderName}" and all files inside?`)) return;
 
     try {
@@ -463,17 +475,24 @@ export default function Home() {
       <main style={{ maxWidth: '1200px', margin: '0 auto', padding: '20px' }}>
         {/* Target Folder Selector */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '16px', flexWrap: 'wrap' }}>
-          <label style={{ fontSize: '14px', color: '#888', fontWeight: 600 }}>📂 Target Upload Folder:</label>
-          <input
-            type="text"
-            value={folderInput}
-            onChange={(e) => setFolderInput(e.target.value)}
-            placeholder="Folder name (optional)"
-            style={{
-              background: '#252525', border: '1px solid #333', color: '#e8e8e8',
-              padding: '8px 12px', borderRadius: '8px', fontSize: '14px', outline: 'none'
-            }}
-          />
+          <label style={{ fontSize: '14px', color: '#888', fontWeight: 600 }}>📂 Upload to:</label>
+          {PERMANENT_FOLDERS.map(name => (
+            <button
+              key={name}
+              onClick={() => selectUploadFolder(name)}
+              title={`Upload to the "${name}" folder`}
+              style={{
+                padding: '8px 16px', borderRadius: '20px', fontSize: '14px', fontWeight: 600,
+                cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px',
+                border: currentFolder === name ? '1px solid #6c63ff' : '1px solid #333',
+                background: currentFolder === name ? '#6c63ff' : '#1a1a1a',
+                color: currentFolder === name ? '#fff' : '#e8e8e8'
+              }}
+            >
+              <span>{name === 'ios' ? '📱' : '🤖'}</span>
+              <span style={{ textTransform: 'capitalize' }}>{name}</span>
+            </button>
+          ))}
         </div>
 
         {/* Upload Drop Zone */}
@@ -540,19 +559,21 @@ export default function Home() {
                 }}>
                   {f.count}
                 </span>
-                <button
-                  onClick={(e) => handleDeleteFolder(f.name, e)}
-                  title={`Delete folder "${f.name}"`}
-                  style={{
-                    background: 'none', border: 'none', color: 'inherit',
-                    opacity: 0.6, cursor: 'pointer', padding: '0 2px', fontSize: '14px',
-                    lineHeight: 1
-                  }}
-                  onMouseEnter={(e) => e.target.style.opacity = '1'}
-                  onMouseLeave={(e) => e.target.style.opacity = '0.6'}
-                >
-                  ✕
-                </button>
+                {!PERMANENT_FOLDERS.includes(f.name) && (
+                  <button
+                    onClick={(e) => handleDeleteFolder(f.name, e)}
+                    title={`Delete folder "${f.name}"`}
+                    style={{
+                      background: 'none', border: 'none', color: 'inherit',
+                      opacity: 0.6, cursor: 'pointer', padding: '0 2px', fontSize: '14px',
+                      lineHeight: 1
+                    }}
+                    onMouseEnter={(e) => e.target.style.opacity = '1'}
+                    onMouseLeave={(e) => e.target.style.opacity = '0.6'}
+                  >
+                    ✕
+                  </button>
+                )}
               </div>
             ))}
           </div>
