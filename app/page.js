@@ -77,14 +77,6 @@ export default function Home() {
     });
   };
 
-  // Select a permanent upload target
-  const selectUploadFolder = (name) => {
-    if (!name) return;
-    setCurrentFolder(name);
-    setFolderInput(name);
-    localStorage.setItem('image_drop_last_folder', name);
-  };
-
   const loadFiles = async (forceFresh = false) => {
     try {
       const res = await fetch(`/api/files${forceFresh ? '?fresh=1' : ''}`);
@@ -459,42 +451,22 @@ export default function Home() {
         background: '#1a1a1a', borderBottom: '1px solid #333', padding: '16px 20px',
         position: 'sticky', top: 0, zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'space-between'
       }}>
-        <h1 style={{ margin: 0, fontSize: '20px', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '8px' }}>
+        <h1
+          onClick={loadFiles}
+          title="Refresh"
+          style={{ margin: 0, fontSize: '20px', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', userSelect: 'none' }}
+        >
           <span>📸</span> Image Drop
         </h1>
         <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
           <button onClick={() => setShowSettings(true)} style={btnGhost} title="Settings & Download Location">
             ⚙️ Settings
           </button>
-          <button onClick={loadFiles} style={btnGhost}>↻ Refresh</button>
-          <button onClick={handleClearAll} style={btnDanger}>🗑 Clear All</button>
         </div>
       </header>
 
       {/* Main Container */}
       <main style={{ maxWidth: '1200px', margin: '0 auto', padding: '20px' }}>
-        {/* Target Folder Selector */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '16px', flexWrap: 'wrap' }}>
-          <label style={{ fontSize: '14px', color: '#888', fontWeight: 600 }}>📂 Upload to:</label>
-          {PERMANENT_FOLDERS.map(name => (
-            <button
-              key={name}
-              onClick={() => selectUploadFolder(name)}
-              title={`Upload to the "${name}" folder`}
-              style={{
-                padding: '8px 16px', borderRadius: '20px', fontSize: '14px', fontWeight: 600,
-                cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px',
-                border: currentFolder === name ? '1px solid #6c63ff' : '1px solid #333',
-                background: currentFolder === name ? '#6c63ff' : '#1a1a1a',
-                color: currentFolder === name ? '#fff' : '#e8e8e8'
-              }}
-            >
-              <span>{name === 'ios' ? '📱' : '🤖'}</span>
-              <span style={{ textTransform: 'capitalize' }}>{name}</span>
-            </button>
-          ))}
-        </div>
-
         {/* Upload Drop Zone */}
         <div
           onClick={() => fileInputRef.current?.click()}
@@ -605,13 +577,6 @@ export default function Home() {
                   >
                     ⬇ Download Selected ({selectedUrls.size})
                   </button>
-                  <button
-                    onClick={() => downloadAsZip(currentFolderFiles.filter(f => selectedUrls.has(f.url)), `${currentFolder}_selected`)}
-                    disabled={isZipping}
-                    style={btnGhost}
-                  >
-                    📦 as ZIP
-                  </button>
                   <button onClick={handleDeleteSelected} style={btnDanger}>
                     🗑 Delete Selected
                   </button>
@@ -625,15 +590,11 @@ export default function Home() {
                   >
                     ⬇ Download All Files ({currentFolderFiles.length})
                   </button>
-                  <button
-                    onClick={() => downloadAsZip(currentFolderFiles, currentFolder)}
-                    disabled={isZipping}
-                    style={btnGhost}
-                  >
-                    📦 as ZIP
-                  </button>
                 </>
               )}
+              <button onClick={handleClearAll} style={btnDanger}>
+                🗑 Clear All
+              </button>
             </div>
           </div>
         )}
