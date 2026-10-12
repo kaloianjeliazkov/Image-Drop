@@ -16,8 +16,19 @@ export default function Home() {
   const [isUploading, setIsUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [uploadStatus, setUploadStatus] = useState('');
+  const [isRefreshing, setIsRefreshing] = useState(false);
   const [lightboxIndex, setLightboxIndex] = useState(null);
   const [toast, setToast] = useState('');
+
+  // Image editor (text / arrows / rename)
+  const [editingFile, setEditingFile] = useState(null);
+  const [editName, setEditName] = useState('');
+  const [annotations, setAnnotations] = useState([]);
+  const [tempArrow, setTempArrow] = useState(null);
+  const [editTool, setEditTool] = useState('text');
+  const canvasRef = useRef(null);
+  const editImageRef = useRef(null);
+  const arrowStartRef = useRef(null);
   
   // Multi-select & Batch features
   const [selectedUrls, setSelectedUrls] = useState(new Set());
@@ -64,20 +75,15 @@ export default function Home() {
   const selectFolder = (name) => {
     if (!name) return;
     setCurrentFolder(name);
-    setFolderInput(name);
-    localStorage.setItem('image_drop_last_folder', name);
-    // Remember folder in known list so empty folders remain visible
-    setKnownFolders(prev => {
-      if (!prev.includes(name)) {
-        const updated = [...prev, name];
-        localStorage.setItem('image_drop_known_folders', JSON.stringify(updated));
-        return updated;
-      }
-      return prev;
-    });
+    // " edited" folders are output-only: viewing them does not change the upload target
+    if (!name.endsWith(' edited')) {
+      setFolderInput(name);
+      localStorage.setItem('image_drop_last_folder', name);
+    }
   };
 
   const loadFiles = async (forceFresh = false) => {
+    setIsRefreshing(true);
     try {
       const res = await fetch(`/api/files${forceFresh ? '?fresh=1' : ''}`);
       if (!res.ok) throw new Error('Failed to fetch');
@@ -119,6 +125,8 @@ export default function Home() {
       });
     } catch (err) {
       console.error(err);
+    } finally {
+      setIsRefreshing(false);
     }
   };
 
@@ -444,8 +452,158 @@ export default function Home() {
     }
   };
 
+  // ---- Image editor ----
+  const openEditor = (file) => {
+    setEditingFile(file);
+    setEditName(file.name.substring(0, file.name.lastIndexOf('.')) || file.name);
+    setAnnotations([]);
+    setTempArrow(null);
+    setEditTool('text');
+  };
+
+  const canvasPos = (e) => {
+    const canvas = canvasRef.current;
+    const rect = canvas.getBoundingClientRect();
+    return {
+      x: (e.clientX - rect.left) * (canvas.width / rect.width),
+      y: (e.clientY - rect.top) * (canvas.height / rect.height)
+    };
+  };
+
+  const redraw = () => {
+    const canvas = canvasRef.current;
+    const img = editImageRef.current;
+    if (!canvas || !img) return;
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+    const drawOne = (a) => {
+      if (a.type === 'text') {
+        ctx.font = 'bold 32px sans-serif';
+        ctx.lineWidth = 6;
+        ctx.strokeStyle = 'rgba(0,0,0,0.85)';
+        ctx.fillStyle = '#ffffff';
+        ctx.strokeText(a.text, a.x, a.y);
+        ctx.fillText(a.text, a.x, a.y);
+      } else {
+        ctx.strokeStyle = '#ff3b30';
+        ctx.fillStyle = '#ff3b30';
+        ctx.lineWidth = 5;
+        ctx.lineCap = 'round';
+        ctx.beginPath();
+        ctx.moveTo(a.x1, a.y1);
+        ctx.lineTo(a.x2, a.y2);
+        ctx.stroke();
+        const angle = Math.atan2(a.y2 - a.y1, a.x2 - a.x1);
+        const head = 16;
+        ctx.beginPath();
+        ctx.moveTo(a.x2, a.y2);
+        ctx.lineTo(a.x2 - head * Math.cos(angle - Math.PI / 6), a.y2 - head * Math.sin(angle - Math.PI / 6));
+        ctx.lineTo(a.x2 - head * Math.cos(angle + Math.PI / 6), a.y2 - head * Math.sin(angle + Math.PI / 6));
+        ctx.closePath();
+        ctx.fill();
+      }
+    };
+    annotations.forEach(drawOne);
+    if (tempArrow) drawOne(tempArrow);
+  };
+
+  // Load the image once when the editor opens
+  useEffect(() => {
+    if (!editingFile) { editImageRef.current = null; return; }
+    const img = new Image();
+    img.onload = () => {
+      editImageRef.current = img;
+      const canvas = canvasRef.current;
+      if (!canvas) return;
+      const scale = Math.min(1, 1200 / img.width);
+      canvas.width = Math.round(img.width * scale);
+      canvas.height = Math.round(img.height * scale);
+      redraw();
+    };
+    img.src = editingFile.url;
+  }, [editingFile]);
+
+  // Redraw when annotations change
+  useEffect(() => {
+    if (editingFile) redraw();
+  }, [annotations, tempArrow]);
+
+  const onCanvasClick = (e) => {
+    if (editTool !== 'text') return;
+    const text = prompt('Text to add:');
+    if (!text) return;
+    const p = canvasPos(e);
+    setAnnotations(prev => [...prev, { type: 'text', x: p.x, y: p.y, text }]);
+  };
+
+  const onCanvasMouseDown = (e) => {
+    if (editTool !== 'arrow') return;
+    arrowStartRef.current = canvasPos(e);
+  };
+
+  const onCanvasMouseMove = (e) => {
+    if (editTool !== 'arrow' || !arrowStartRef.current) return;
+    const p = canvasPos(e);
+    setTempArrow({ x1: arrowStartRef.current.x, y1: arrowStartRef.current.y, x2: p.x, y2: p.y });
+  };
+
+  const onCanvasMouseUp = () => {
+    if (tempArrow) {
+      setAnnotations(prev => [...prev, { type: 'arrow', ...tempArrow }]);
+      setTempArrow(null);
+    }
+    arrowStartRef.current = null;
+  };
+
+  const saveEditedImage = async () => {
+    if (!editingFile || !canvasRef.current) return;
+    const canvas = canvasRef.current;
+    const ext = (editingFile.name.substring(editingFile.name.lastIndexOf('.')) || '.jpg').toLowerCase();
+    const mime = ext === '.png' ? 'image/png' : 'image/jpeg';
+    const base = (editName.trim() || editingFile.name).replace(/\.[^.]+$/, '').replace(/[^a-zA-Z0-9_-]/g, '_');
+    const folder = `${editingFile.folder} edited`;
+    const pathname = `${folder}/${base}_edited_${Date.now()}${ext === '.png' ? '.png' : '.jpg'}`;
+    setIsUploading(true);
+    setUploadStatus(`Saving edited image to "${folder}"...`);
+    try {
+      const blob = await new Promise(res => canvas.toBlob(res, mime, 0.92));
+      if (!blob) throw new Error('Could not render image');
+      await upload(pathname, blob, { access: 'public', handleUploadUrl: '/api/upload' });
+      showToast(`✓ Saved to "${folder}"`);
+      setEditingFile(null);
+      setCurrentFolder(folder);
+      loadFiles(true);
+    } catch (err) {
+      console.error('Edit save error:', err);
+      showToast(`❌ Save failed: ${err.message || 'Upload failed'}`);
+    } finally {
+      setIsUploading(false);
+      setUploadStatus('');
+    }
+  };
+
   return (
     <div>
+      <style>{`@keyframes dropSpin { to { transform: rotate(360deg); } }`}</style>
+
+      {/* Refresh loading indicator */}
+      {isRefreshing && (
+        <div style={{
+          position: 'fixed', top: '12px', left: '50%', transform: 'translateX(-50%)',
+          zIndex: 500, display: 'flex', alignItems: 'center', gap: '8px',
+          background: 'rgba(0,0,0,0.8)', padding: '7px 16px', borderRadius: '20px',
+          color: '#fff', fontSize: '12px', fontWeight: 600, boxShadow: '0 4px 12px rgba(0,0,0,0.4)'
+        }}>
+          <span style={{
+            display: 'inline-block', width: '12px', height: '12px',
+            border: '2px solid rgba(255,255,255,0.25)', borderTopColor: '#6c63ff',
+            borderRadius: '50%', animation: 'dropSpin 0.8s linear infinite'
+          }} />
+          Refreshing…
+        </div>
+      )}
+
       {/* Header */}
       <header style={{
         background: '#1a1a1a', borderBottom: '1px solid #333', padding: '16px 20px',
@@ -677,6 +835,15 @@ export default function Home() {
                       {file.name}
                     </span>
                     <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                      {!file.isVideo && (
+                        <button
+                          onClick={(e) => { e.stopPropagation(); openEditor(file); }}
+                          style={{ background: 'none', border: 'none', color: '#888', cursor: 'pointer', fontSize: '14px' }}
+                          title="Edit image (add text, arrows, rename)"
+                        >
+                          ✏️
+                        </button>
+                      )}
                       <button
                         onClick={() => downloadSingleFile(file)}
                         style={{ background: 'none', border: 'none', color: '#888', cursor: 'pointer', fontSize: '14px' }}
@@ -816,19 +983,104 @@ export default function Home() {
             />
           )}
 
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              downloadSingleFile(currentFolderFiles[lightboxIndex]);
-            }}
+          <div style={{ position: 'absolute', bottom: '20px', right: '20px', display: 'flex', gap: '8px' }}>
+            {!currentFolderFiles[lightboxIndex].isVideo && (
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  openEditor(currentFolderFiles[lightboxIndex]);
+                }}
+                style={{
+                  padding: '8px 16px', background: 'rgba(255,255,255,0.15)', color: 'white',
+                  borderRadius: '8px', border: 'none', fontWeight: 600, fontSize: '14px', cursor: 'pointer'
+                }}
+              >
+                ✏️ Edit
+              </button>
+            )}
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                downloadSingleFile(currentFolderFiles[lightboxIndex]);
+              }}
+              style={{
+                padding: '8px 16px', background: '#6c63ff', color: 'white',
+                borderRadius: '8px', border: 'none', fontWeight: 600, fontSize: '14px', cursor: 'pointer'
+              }}
+            >
+              ⬇ Download
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Image Editor */}
+      {editingFile && (
+        <div
+          onClick={() => setEditingFile(null)}
+          style={{
+            position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.92)', zIndex: 250,
+            display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px'
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
             style={{
-              position: 'absolute', bottom: '20px', right: '20px', padding: '8px 16px',
-              background: '#6c63ff', color: 'white', borderRadius: '8px', border: 'none',
-              fontWeight: 600, fontSize: '14px', cursor: 'pointer'
+              background: '#1e1e1e', border: '1px solid #333', borderRadius: '14px',
+              padding: '20px', maxWidth: '900px', width: '100%', color: '#e8e8e8',
+              maxHeight: '95vh', overflowY: 'auto'
             }}
           >
-            ⬇ Download
-          </button>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+              <h3 style={{ margin: 0, fontSize: '17px' }}>✏️ Edit image</h3>
+              <button onClick={() => setEditingFile(null)} style={{ background: 'none', border: 'none', color: '#888', fontSize: '20px', cursor: 'pointer' }}>✕</button>
+            </div>
+
+            <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap', marginBottom: '12px' }}>
+              <button
+                onClick={() => setEditTool('text')}
+                style={editTool === 'text' ? btnPrimary : btnGhost}
+                title="Click on the image to add text"
+              >
+                🅣 Add text
+              </button>
+              <button
+                onClick={() => setEditTool('arrow')}
+                style={editTool === 'arrow' ? btnPrimary : btnGhost}
+                title="Drag on the image to draw an arrow"
+              >
+                ↗️ Add arrow
+              </button>
+              <span style={{ fontSize: '12px', color: '#888' }}>
+                {editTool === 'text' ? 'Click the image to place text' : 'Drag on the image to draw an arrow'}
+              </span>
+            </div>
+
+            <label style={{ fontSize: '13px', color: '#888', display: 'block', marginBottom: '6px' }}>File name</label>
+            <input
+              type="text"
+              value={editName}
+              onChange={(e) => setEditName(e.target.value)}
+              style={{ width: '100%', background: '#252525', border: '1px solid #333', color: '#e8e8e8', padding: '8px 12px', borderRadius: '8px', fontSize: '14px', outline: 'none', marginBottom: '12px', boxSizing: 'border-box' }}
+            />
+
+            <canvas
+              ref={canvasRef}
+              onClick={onCanvasClick}
+              onMouseDown={onCanvasMouseDown}
+              onMouseMove={onCanvasMouseMove}
+              onMouseUp={onCanvasMouseUp}
+              onMouseLeave={onCanvasMouseUp}
+              style={{ display: 'block', maxWidth: '100%', borderRadius: '8px', cursor: editTool === 'text' ? 'text' : 'crosshair', background: '#000' }}
+            />
+
+            <div style={{ display: 'flex', gap: '8px', marginTop: '14px', justifyContent: 'flex-end', flexWrap: 'wrap' }}>
+              <button onClick={() => setEditingFile(null)} style={btnGhost}>Cancel</button>
+              <button onClick={saveEditedImage} disabled={isUploading} style={btnPrimary}>
+                💾 Save to "{editingFile.folder} edited"
+              </button>
+            </div>
+          </div>
         </div>
       )}
 
