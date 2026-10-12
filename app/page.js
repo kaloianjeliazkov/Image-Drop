@@ -25,10 +25,12 @@ export default function Home() {
   const [editName, setEditName] = useState('');
   const [annotations, setAnnotations] = useState([]);
   const [tempArrow, setTempArrow] = useState(null);
-  const [editTool, setEditTool] = useState('text');
+  const [editTool, setEditTool] = useState('move');
+  const [textDraft, setTextDraft] = useState(null);
   const canvasRef = useRef(null);
   const editImageRef = useRef(null);
   const arrowStartRef = useRef(null);
+  const dragTextRef = useRef(null);
   
   // Multi-select & Batch features
   const [selectedUrls, setSelectedUrls] = useState(new Set());
@@ -458,7 +460,8 @@ export default function Home() {
     setEditName(file.name.substring(0, file.name.lastIndexOf('.')) || file.name);
     setAnnotations([]);
     setTempArrow(null);
-    setEditTool('text');
+    setTextDraft(null);
+    setEditTool('move');
   };
 
   const canvasPos = (e) => {
@@ -540,21 +543,48 @@ export default function Home() {
 
   const onCanvasClick = (e) => {
     if (editTool !== 'text') return;
-    const text = prompt('Text to add:');
-    if (!text) return;
     const p = canvasPos(e);
-    setAnnotations(prev => [...prev, { type: 'text', x: p.x, y: p.y, text }]);
+    setTextDraft({ x: p.x, y: p.y, value: '' });
+  };
+
+  const findTextAt = (p) => {
+    const canvas = canvasRef.current;
+    if (!canvas) return -1;
+    const ctx = canvas.getContext('2d');
+    ctx.font = 'bold 32px sans-serif';
+    for (let i = annotations.length - 1; i >= 0; i--) {
+      const a = annotations[i];
+      if (a.type !== 'text') continue;
+      const w = ctx.measureText(a.text).width;
+      if (p.x >= a.x - 10 && p.x <= a.x + w + 10 && p.y >= a.y - 34 && p.y <= a.y + 12) {
+        return i;
+      }
+    }
+    return -1;
   };
 
   const onCanvasMouseDown = (e) => {
-    if (editTool !== 'arrow') return;
-    arrowStartRef.current = canvasPos(e);
+    if (editTool === 'arrow') {
+      arrowStartRef.current = canvasPos(e);
+    } else if (editTool === 'move') {
+      const p = canvasPos(e);
+      const idx = findTextAt(p);
+      if (idx >= 0) {
+        const a = annotations[idx];
+        dragTextRef.current = { index: idx, dx: p.x - a.x, dy: p.y - a.y };
+      }
+    }
   };
 
   const onCanvasMouseMove = (e) => {
-    if (editTool !== 'arrow' || !arrowStartRef.current) return;
-    const p = canvasPos(e);
-    setTempArrow({ x1: arrowStartRef.current.x, y1: arrowStartRef.current.y, x2: p.x, y2: p.y });
+    if (editTool === 'arrow' && arrowStartRef.current) {
+      const p = canvasPos(e);
+      setTempArrow({ x1: arrowStartRef.current.x, y1: arrowStartRef.current.y, x2: p.x, y2: p.y });
+    } else if (editTool === 'move' && dragTextRef.current) {
+      const p = canvasPos(e);
+      const { index, dx, dy } = dragTextRef.current;
+      setAnnotations(prev => prev.map((a, i) => (i === index ? { ...a, x: p.x - dx, y: p.y - dy } : a)));
+    }
   };
 
   const onCanvasMouseUp = () => {
@@ -563,6 +593,25 @@ export default function Home() {
       setTempArrow(null);
     }
     arrowStartRef.current = null;
+    dragTextRef.current = null;
+  };
+
+  const commitTextDraft = () => {
+    if (textDraft && textDraft.value.trim()) {
+      setAnnotations(prev => [...prev, { type: 'text', x: textDraft.x, y: textDraft.y, text: textDraft.value.trim() }]);
+    }
+    setTextDraft(null);
+  };
+
+  // Scale factor between canvas attribute size and displayed size
+  const canvasScale = () => {
+    const canvas = canvasRef.current;
+    if (!canvas) return { x: 1, y: 1 };
+    const rect = canvas.getBoundingClientRect();
+    return {
+      x: rect.width / canvas.width,
+      y: rect.height / canvas.height
+    };
   };
 
   const saveEditedImage = async () => {
@@ -1047,6 +1096,13 @@ export default function Home() {
 
             <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap', marginBottom: '12px' }}>
               <button
+                onClick={() => setEditTool('move')}
+                style={editTool === 'move' ? btnPrimary : btnGhost}
+                title="Drag text boxes to move them"
+              >
+                ✋ Move
+              </button>
+              <button
                 onClick={() => setEditTool('text')}
                 style={editTool === 'text' ? btnPrimary : btnGhost}
                 title="Click on the image to add text"
@@ -1061,7 +1117,9 @@ export default function Home() {
                 ↗️ Add arrow
               </button>
               <span style={{ fontSize: '12px', color: '#888' }}>
-                {editTool === 'text' ? 'Click the image to place text' : 'Drag on the image to draw an arrow'}
+                {editTool === 'move' && 'Drag text boxes to move them'}
+                {editTool === 'text' && 'Click the image to place text'}
+                {editTool === 'arrow' && 'Drag on the image to draw an arrow'}
               </span>
             </div>
 
@@ -1073,15 +1131,50 @@ export default function Home() {
               style={{ width: '100%', background: '#252525', border: '1px solid #333', color: '#e8e8e8', padding: '8px 12px', borderRadius: '8px', fontSize: '14px', outline: 'none', marginBottom: '12px', boxSizing: 'border-box' }}
             />
 
-            <canvas
-              ref={canvasRef}
-              onClick={onCanvasClick}
-              onMouseDown={onCanvasMouseDown}
-              onMouseMove={onCanvasMouseMove}
-              onMouseUp={onCanvasMouseUp}
-              onMouseLeave={onCanvasMouseUp}
-              style={{ display: 'block', maxWidth: '100%', maxHeight: 'calc(96vh - 300px)', width: 'auto', height: 'auto', borderRadius: '8px', cursor: editTool === 'text' ? 'text' : 'crosshair', background: '#000' }}
-            />
+            <div style={{ display: 'flex', justifyContent: 'center' }}>
+              <div style={{ position: 'relative', display: 'inline-block', maxWidth: '100%' }}>
+                <canvas
+                  ref={canvasRef}
+                  onClick={onCanvasClick}
+                  onMouseDown={onCanvasMouseDown}
+                  onMouseMove={onCanvasMouseMove}
+                  onMouseUp={onCanvasMouseUp}
+                  onMouseLeave={onCanvasMouseUp}
+                  style={{ display: 'block', maxWidth: '100%', maxHeight: 'calc(96vh - 300px)', width: 'auto', height: 'auto', borderRadius: '8px', cursor: editTool === 'text' ? 'text' : editTool === 'move' ? 'move' : 'crosshair', background: '#000' }}
+                />
+                {textDraft && (() => {
+                  const s = canvasScale();
+                  return (
+                    <input
+                      autoFocus
+                      value={textDraft.value}
+                      onChange={(e) => setTextDraft({ ...textDraft, value: e.target.value })}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') commitTextDraft();
+                        if (e.key === 'Escape') setTextDraft(null);
+                      }}
+                      onBlur={commitTextDraft}
+                      placeholder="Type text, Enter to place"
+                      style={{
+                        position: 'absolute',
+                        left: textDraft.x * s.x,
+                        top: textDraft.y * s.y,
+                        transform: 'translate(-50%, -50%)',
+                        background: 'rgba(0,0,0,0.9)',
+                        color: '#fff',
+                        border: '1px solid #6c63ff',
+                        borderRadius: '6px',
+                        padding: '4px 8px',
+                        fontSize: '14px',
+                        outline: 'none',
+                        minWidth: '100px',
+                        zIndex: 10
+                      }}
+                    />
+                  );
+                })()}
+              </div>
+            </div>
 
             <div style={{ display: 'flex', gap: '8px', marginTop: '14px', justifyContent: 'flex-end', flexWrap: 'wrap' }}>
               <button onClick={() => setEditingFile(null)} style={btnGhost}>Cancel</button>
