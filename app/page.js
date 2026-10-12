@@ -8,6 +8,9 @@ import { saveAs } from 'file-saver';
 // Permanent folders: always visible as tabs and upload targets, even when empty
 const PERMANENT_FOLDERS = ['android', 'ios'];
 
+// Biggest canvas iOS Safari can export (4096 x 4096 worth of pixels); larger photos are scaled down to this when saving edits
+const MAX_EXPORT_PIXELS = 4096 * 4096;
+
 export default function Home() {
   const [files, setFiles] = useState([]);
   const [folders, setFolders] = useState([]);
@@ -27,6 +30,7 @@ export default function Home() {
   const [tempArrow, setTempArrow] = useState(null);
   const [editTool, setEditTool] = useState('arrow');
   const [textDraft, setTextDraft] = useState(null);
+  const [hoverAnn, setHoverAnn] = useState(false);
   const canvasRef = useRef(null);
   const editImageRef = useRef(null);
   const arrowRef = useRef(null);
@@ -484,6 +488,7 @@ export default function Home() {
     setAnnotations([]);
     setTempArrow(null);
     setTextDraft(null);
+    setHoverAnn(false);
     setEditTool('arrow');
   };
 
@@ -498,13 +503,15 @@ export default function Home() {
     };
   };
 
-  const redraw = () => {
-    const canvas = canvasRef.current;
-    const img = editImageRef.current;
-    if (!canvas || !img) return;
-    const ctx = canvas.getContext('2d');
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+  // Paint the image and annotations onto a canvas of any size. Annotations are stored in
+  // editor-canvas coordinates, so they get scaled up when saving at the original resolution
+  const paintEdit = (target, list) => {
+    const view = canvasRef.current;
+    const ctx = target.getContext('2d');
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, target.width, target.height);
+    ctx.drawImage(editImageRef.current, 0, 0, target.width, target.height);
+    ctx.setTransform(target.width / view.width, 0, 0, target.height / view.height, 0, 0);
     const drawOne = (a) => {
       if (a.type === 'text') {
         ctx.font = 'bold 32px sans-serif';
@@ -548,8 +555,14 @@ export default function Home() {
         drawArrow('#ff3b30', 0);
       }
     };
-    annotations.forEach(drawOne);
-    if (tempArrow) drawOne(tempArrow);
+    list.forEach(drawOne);
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+  };
+
+  const redraw = () => {
+    const canvas = canvasRef.current;
+    if (!canvas || !editImageRef.current) return;
+    paintEdit(canvas, tempArrow ? [...annotations, tempArrow] : annotations);
   };
 
   // Load the image once when the editor opens
@@ -655,6 +668,9 @@ export default function Home() {
       const p = canvasPos(e);
       arrowRef.current = { ...arrowRef.current, x2: p.x, y2: p.y };
       setTempArrow(arrowRef.current);
+    } else {
+      // Show the move cursor over any text or arrow that can be dragged
+      setHoverAnn(findAnnotationAt(canvasPos(e)) >= 0);
     }
   };
 
@@ -678,8 +694,8 @@ export default function Home() {
   };
 
   const saveEditedImage = async () => {
-    if (!editingFile || !canvasRef.current) return;
-    const canvas = canvasRef.current;
+    const img = editImageRef.current;
+    if (!editingFile || !canvasRef.current || !img) return;
     const ext = (editingFile.name.substring(editingFile.name.lastIndexOf('.')) || '.jpg').toLowerCase();
     const mime = ext === '.png' ? 'image/png' : 'image/jpeg';
     const base = (editName.trim() || editingFile.name).replace(/\.[^.]+$/, '').replace(/[^a-zA-Z0-9_-]/g, '_');
@@ -688,7 +704,13 @@ export default function Home() {
     setIsUploading(true);
     setUploadStatus(`Saving edited image to "${folder}"...`);
     try {
-      const blob = await new Promise(res => canvas.toBlob(res, mime, 0.92));
+      // Render at the image's original resolution, not the smaller size shown in the editor
+      const shrink = Math.min(1, Math.sqrt(MAX_EXPORT_PIXELS / (img.width * img.height)));
+      const out = document.createElement('canvas');
+      out.width = Math.floor(img.width * shrink);
+      out.height = Math.floor(img.height * shrink);
+      paintEdit(out, annotations);
+      const blob = await new Promise(res => out.toBlob(res, mime, 0.92));
       if (!blob) throw new Error('Could not render image');
       await upload(pathname, blob, { access: 'public', handleUploadUrl: '/api/upload' });
       showToast(`✓ Saved to "${folder}"`);
@@ -1194,9 +1216,10 @@ export default function Home() {
                   onPointerMove={onCanvasPointerMove}
                   onPointerUp={onCanvasPointerUp}
                   onPointerCancel={onCanvasPointerUp}
+                  onPointerLeave={() => setHoverAnn(false)}
                   // Stop the browser moving focus off the text field we just opened (and selecting page text while dragging)
                   onMouseDown={(e) => e.preventDefault()}
-                  style={{ display: 'block', maxWidth: '100%', maxHeight: 'calc(96vh - 300px)', width: 'auto', height: 'auto', borderRadius: '8px', cursor: editTool === 'text' ? 'text' : 'crosshair', background: '#000', touchAction: 'none' }}
+                  style={{ display: 'block', maxWidth: '100%', maxHeight: 'calc(96vh - 300px)', width: 'auto', height: 'auto', borderRadius: '8px', cursor: hoverAnn ? 'move' : editTool === 'text' ? 'text' : 'crosshair', background: '#000', touchAction: 'none' }}
                 />
                 {textDraft && (() => {
                   const canvas = canvasRef.current;
