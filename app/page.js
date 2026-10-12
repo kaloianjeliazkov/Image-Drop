@@ -113,24 +113,6 @@ export default function Home() {
 
   useEffect(() => {
     loadFiles();
-
-    // Refresh ONLY when user switches back to the tab/app (saves operations!)
-    const handleVisibility = () => {
-      if (document.visibilityState === 'visible') {
-        loadFiles(true);
-      }
-    };
-    window.addEventListener('visibilitychange', handleVisibility);
-    window.addEventListener('focus', handleVisibility);
-
-    // Light background poll every 60s instead of 12s
-    const timer = setInterval(() => loadFiles(false), 60000);
-
-    return () => {
-      window.removeEventListener('visibilitychange', handleVisibility);
-      window.removeEventListener('focus', handleVisibility);
-      clearInterval(timer);
-    };
   }, [currentFolder]);
 
   // Clear selections when switching folder
