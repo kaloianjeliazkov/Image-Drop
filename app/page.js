@@ -321,6 +321,11 @@ export default function Home() {
       } else {
         saveAs(blob, file.name);
       }
+
+      // Auto delete if option enabled
+      if (deleteAfterDownload) {
+        await deleteFilesSilently([file.url]);
+      }
     } catch (err) {
       showToast(`Download failed: ${err.message}`);
     }
