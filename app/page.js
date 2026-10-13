@@ -67,6 +67,8 @@ export default function Home() {
   const [customDirHandle, setCustomDirHandle] = useState(null);
   const [customDirName, setCustomDirName] = useState('');
   const [autoSaveDirect, setAutoSaveDirect] = useState(false);
+  // Mirrors customDirHandle so a folder picked mid-call is usable right away (state lags a render)
+  const customDirHandleRef = useRef(null);
   const [deleteAfterDownload, setDeleteAfterDownload] = useState(false);
   const [knownFolders, setKnownFolders] = useState([]);
 
@@ -292,9 +294,9 @@ export default function Home() {
 
   // Direct save to custom folder if File System Access API is supported and configured
   const saveFileToDirectory = async (filename, blob) => {
-    if (customDirHandle && autoSaveDirect) {
+    if (customDirHandleRef.current && autoSaveDirect) {
       try {
-        const fileHandle = await customDirHandle.getFileHandle(filename, { create: true });
+        const fileHandle = await customDirHandleRef.current.getFileHandle(filename, { create: true });
         const writable = await fileHandle.createWritable();
         await writable.write(blob);
         await writable.close();
@@ -374,17 +376,36 @@ export default function Home() {
     setZipProgress('');
   };
 
-  // Download files as separate individual files directly
+  // Download/save the given files: single destination folder, no per-file prompts.
   const downloadAsIndividualFiles = async (filesToDownload) => {
     if (filesToDownload.length === 0) return;
+
+    // Several files and no destination folder set yet: ask ONCE for a folder, then write every
+    // file straight into it (instead of a separate browser save prompt per file).
+    if (filesToDownload.length > 1 && !customDirHandleRef.current) {
+      if (window.showDirectoryPicker) {
+        try {
+          const dirHandle = await window.showDirectoryPicker({ mode: 'readwrite' });
+          customDirHandleRef.current = dirHandle;
+          setCustomDirHandle(dirHandle);
+          setCustomDirName(dirHandle.name);
+          setAutoSaveDirect(true);
+          showToast(`Saving ${filesToDownload.length} file(s) to ${dirHandle.name}...`);
+        } catch (err) {
+          showToast('Download cancelled');
+          return; // user closed the folder picker
+        }
+      }
+    }
+
     setIsZipping(true);
-    setZipProgress(`Downloading 0/${filesToDownload.length} files...`);
+    setZipProgress(`Saving 0/${filesToDownload.length} files...`);
 
     let savedCount = 0;
     const downloadedUrls = [];
     for (let i = 0; i < filesToDownload.length; i++) {
       const file = filesToDownload[i];
-      setZipProgress(`Downloading ${i + 1}/${filesToDownload.length}: ${file.name}...`);
+      setZipProgress(`Saving ${i + 1}/${filesToDownload.length}: ${file.name}...`);
       try {
         const resp = await fetch(file.url);
         const blob = await resp.blob();
@@ -395,7 +416,7 @@ export default function Home() {
         savedCount++;
         downloadedUrls.push(file.url);
         // Small delay between browser downloads if not using direct directory handle
-        if (!customDirHandle) {
+        if (!customDirHandleRef.current) {
           await new Promise(r => setTimeout(r, 350));
         }
       } catch (e) {
@@ -405,7 +426,9 @@ export default function Home() {
 
     setIsZipping(false);
     setZipProgress('');
-    showToast(`✓ Downloaded ${savedCount} file(s) individually!`);
+    showToast(customDirHandleRef.current
+      ? `✓ Saved ${savedCount} file(s) to ${customDirName}!`
+      : `✓ Downloaded ${savedCount} file(s) individually!`);
 
     // Auto delete if option enabled
     if (deleteAfterDownload && downloadedUrls.length > 0) {
@@ -535,6 +558,7 @@ export default function Home() {
     }
     try {
       const dirHandle = await window.showDirectoryPicker({ mode: 'readwrite' });
+      customDirHandleRef.current = dirHandle;
       setCustomDirHandle(dirHandle);
       setCustomDirName(dirHandle.name);
       setAutoSaveDirect(true);
