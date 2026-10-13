@@ -176,6 +176,26 @@ export default function Home() {
     loadFiles(true);
   };
 
+  // Record a finished upload in the Supabase index. Server-side no-op until Supabase env vars
+  // are configured, and never allowed to fail an upload that otherwise succeeded.
+  const indexFile = async (blob, size) => {
+    if (!blob || !blob.url) return;
+    try {
+      await fetch('/api/files', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          pathname: blob.pathname,
+          url: blob.url,
+          downloadUrl: blob.downloadUrl,
+          size: size ?? 0,
+        }),
+      });
+    } catch (err) {
+      console.warn('Index update failed:', err);
+    }
+  };
+
   useEffect(() => {
     loadFiles();
   }, [currentFolder]);
@@ -203,10 +223,11 @@ export default function Home() {
       setUploadStatus(`Uploading ${i + 1}/${total}: ${file.name}`);
 
       try {
-        await upload(pathname, file, {
+        const uploaded = await upload(pathname, file, {
           access: 'public',
           handleUploadUrl: '/api/upload',
         });
+        await indexFile(uploaded, file.size);
         successCount++;
         setUploadProgress(Math.round(((i + 1) / total) * 100));
       } catch (err) {
@@ -790,7 +811,8 @@ export default function Home() {
       paintEdit(out, annotations);
       const blob = await new Promise(res => out.toBlob(res, mime, 0.92));
       if (!blob) throw new Error('Could not render image');
-      await upload(pathname, blob, { access: 'public', handleUploadUrl: '/api/upload' });
+      const uploaded = await upload(pathname, blob, { access: 'public', handleUploadUrl: '/api/upload' });
+      await indexFile(uploaded, blob.size);
       showToast(`✓ Saved as "${filename}"`);
       setEditingFile(null);
       setCurrentFolder(folder);
