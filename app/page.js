@@ -294,7 +294,7 @@ export default function Home() {
 
   // Direct save to custom folder if File System Access API is supported and configured
   const saveFileToDirectory = async (filename, blob) => {
-    if (customDirHandleRef.current && autoSaveDirect) {
+    if (customDirHandleRef.current) {
       try {
         const fileHandle = await customDirHandleRef.current.getFileHandle(filename, { create: true });
         const writable = await fileHandle.createWritable();
