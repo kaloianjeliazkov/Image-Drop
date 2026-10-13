@@ -813,7 +813,7 @@ export default function Home() {
           title="Refresh"
           style={{ margin: 0, fontSize: '20px', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', userSelect: 'none' }}
         >
-          <span>📸</span> Koldrop
+          <KLogo size={26} /> Koldrop
         </h1>
         <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
           <button onClick={() => setShowSettings(true)} style={btnGhost} title="Settings & Download Location">
@@ -1326,6 +1326,28 @@ export default function Home() {
     </div>
   );
 }
+
+// Liquid "K" logo mark, shared by the header (the favicon version lives in app/icon.svg)
+const KLogo = ({ size = 28 }) => (
+  <svg width={size} height={size} viewBox="0 0 100 100" aria-hidden="true" style={{ display: 'block', flex: '0 0 auto' }}>
+    <defs>
+      <linearGradient id="kLogoBg" x1="10%" y1="0%" x2="90%" y2="100%">
+        <stop offset="0%" stopColor="#9d8fff" />
+        <stop offset="45%" stopColor="#6c63ff" />
+        <stop offset="100%" stopColor="#382ac4" />
+      </linearGradient>
+    </defs>
+    {/* Liquid blob */}
+    <path d="M51 4 C73 2 93 17 95 41 C97 65 79 94 52 96 C27 98 5 77 5 51 C5 27 28 6.5 51 4 Z" fill="url(#kLogoBg)" />
+    {/* Glossy sheen */}
+    <ellipse cx="35" cy="27" rx="25" ry="15" fill="#ffffff" opacity="0.25" transform="rotate(-22 35 27)" />
+    {/* Letter K */}
+    <g fill="none" stroke="#ffffff" strokeWidth="11" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M38 27 L38 73" />
+      <path d="M63 28 L41 50 L63 72" />
+    </g>
+  </svg>
+);
 
 const btnGhost = {
   background: 'transparent', color: '#888', border: '1px solid #333',
