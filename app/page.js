@@ -380,6 +380,8 @@ export default function Home() {
   const downloadAsIndividualFiles = async (filesToDownload) => {
     if (filesToDownload.length === 0) return;
 
+    let folderLabel = customDirName; // shown in the final toast; set here (before the picker) to avoid TDZ
+
     // Several files and no destination folder set yet: ask ONCE for a folder, then write every
     // file straight into it (instead of a separate browser save prompt per file).
     if (filesToDownload.length > 1 && !customDirHandleRef.current) {
@@ -404,7 +406,6 @@ export default function Home() {
 
     let savedCount = 0;
     const downloadedUrls = [];
-    let folderLabel = customDirName;
     for (let i = 0; i < filesToDownload.length; i++) {
       const file = filesToDownload[i];
       setZipProgress(`Saving ${i + 1}/${filesToDownload.length}: ${file.name}...`);
