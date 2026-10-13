@@ -12,6 +12,14 @@ const PERMANENT_FOLDERS = ['android', 'ios', 'android edited', 'ios edited'];
 // Biggest canvas iOS Safari can export (4096 x 4096 worth of pixels); larger photos are scaled down to this when saving edits
 const MAX_EXPORT_PIXELS = 4096 * 4096;
 
+// The editor canvas keeps (near) full resolution and is scaled down with CSS, so it looks as
+// sharp and as large as the lightbox. Capped on the long side so huge photos stay quick to redraw.
+const MAX_EDIT_DIM = 3000;
+
+// Annotation sizes (font, stroke, arrow head) are authored against a ~1000px canvas and scaled
+// with the real resolution, so they look the same on screen and in the full-resolution export.
+const annK = (w, h) => Math.max(0.6, Math.min(6, Math.sqrt(w * h) / 1000));
+
 export default function Home() {
   const [files, setFiles] = useState([]);
   const [folders, setFolders] = useState([]);
@@ -520,11 +528,12 @@ export default function Home() {
     ctx.clearRect(0, 0, target.width, target.height);
     ctx.drawImage(editImageRef.current, 0, 0, target.width, target.height);
     ctx.setTransform(target.width / view.width, 0, 0, target.height / view.height, 0, 0);
+    const k = annK(view.width, view.height);
     const drawOne = (a) => {
       if (a.type === 'text') {
-        ctx.font = 'bold 32px sans-serif';
+        ctx.font = `bold ${32 * k}px sans-serif`;
         ctx.textBaseline = 'middle'; // (x, y) is the left middle of the text, where the text field sat
-        ctx.lineWidth = 6;
+        ctx.lineWidth = 6 * k;
         ctx.lineJoin = 'round';
         ctx.strokeStyle = 'rgba(0,0,0,0.85)';
         ctx.fillStyle = '#ffffff';
@@ -532,7 +541,7 @@ export default function Home() {
         ctx.fillText(a.text, a.x, a.y);
       } else {
         const angle = Math.atan2(a.y2 - a.y1, a.x2 - a.x1);
-        const head = 22;
+        const head = 22 * k;
         const spread = Math.PI / 7;
         // End the shaft inside the head so its round cap doesn't blunt the tip
         const shaftX = a.x2 - head * 0.8 * Math.cos(angle);
@@ -542,7 +551,7 @@ export default function Home() {
           ctx.fillStyle = color;
           ctx.lineCap = 'round';
           ctx.lineJoin = 'round';
-          ctx.lineWidth = 5 + outline;
+          ctx.lineWidth = 5 * k + outline;
           ctx.beginPath();
           ctx.moveTo(a.x1, a.y1);
           ctx.lineTo(shaftX, shaftY);
@@ -559,7 +568,7 @@ export default function Home() {
           }
         };
         // Dark edge first (like the text outline) so the arrow shows up on red or busy screenshots
-        drawArrow('rgba(0,0,0,0.55)', 3);
+        drawArrow('rgba(0,0,0,0.55)', 3 * k);
         drawArrow('#ff3b30', 0);
       }
     };
@@ -602,10 +611,9 @@ export default function Home() {
       editImageRef.current = img;
       const canvas = canvasRef.current;
       if (!canvas) return;
-      // Fit the image within the screen so no scrolling is needed
-      const maxW = Math.min(1200, window.innerWidth - 60);
-      const maxH = Math.max(200, window.innerHeight - 300); // room for header, tools, name, buttons
-      const scale = Math.min(1, maxW / img.width, maxH / img.height);
+      // Keep (near) full resolution and let CSS fit it to the screen — that way the editor is
+      // as large and as sharp as the lightbox, and the saved edit stays high quality
+      const scale = Math.min(1, MAX_EDIT_DIM / Math.max(img.width, img.height));
       canvas.width = Math.round(img.width * scale);
       canvas.height = Math.round(img.height * scale);
       redraw();
@@ -664,14 +672,15 @@ export default function Home() {
     const canvas = canvasRef.current;
     if (!canvas) return -1;
     const ctx = canvas.getContext('2d');
-    ctx.font = 'bold 32px sans-serif';
+    const k = annK(canvas.width, canvas.height);
+    ctx.font = `bold ${32 * k}px sans-serif`;
     for (let i = annotations.length - 1; i >= 0; i--) {
       const a = annotations[i];
       if (a.type === 'arrow') {
-        if (distToSegment(p, { x: a.x1, y: a.y1 }, { x: a.x2, y: a.y2 }) <= 12) return i;
+        if (distToSegment(p, { x: a.x1, y: a.y1 }, { x: a.x2, y: a.y2 }) <= 12 * k) return i;
       } else {
         const w = ctx.measureText(a.text).width;
-        if (p.x >= a.x - 10 && p.x <= a.x + w + 10 && p.y >= a.y - 22 && p.y <= a.y + 22) return i;
+        if (p.x >= a.x - 10 * k && p.x <= a.x + w + 10 * k && p.y >= a.y - 22 * k && p.y <= a.y + 22 * k) return i;
       }
     }
     return -1;
@@ -1233,7 +1242,7 @@ export default function Home() {
                 onPointerLeave={() => setHoverAnn(false)}
                 // Stop the browser moving focus off the text field we just opened (and selecting page text while dragging)
                 onMouseDown={(e) => e.preventDefault()}
-                style={{ display: 'block', maxWidth: '90vw', maxHeight: 'calc(100vh - 170px)', width: 'auto', height: 'auto', borderRadius: '8px', cursor: hoverAnn ? 'move' : editTool === 'text' ? 'text' : 'crosshair', background: '#000', touchAction: 'none' }}
+                style={{ display: 'block', maxWidth: '90vw', maxHeight: 'calc(100vh - 150px)', width: 'auto', height: 'auto', borderRadius: '8px', cursor: hoverAnn ? 'move' : editTool === 'text' ? 'text' : 'crosshair', background: '#000', touchAction: 'none' }}
               />
               {textDraft && (() => {
                 const canvas = canvasRef.current;
