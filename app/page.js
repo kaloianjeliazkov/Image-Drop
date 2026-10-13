@@ -435,9 +435,9 @@ export default function Home() {
     }
   };
 
-  // Delete single file
+  // Delete single file. Returns true when it was actually deleted (used by the lightbox).
   const handleDelete = async (url) => {
-    if (!confirm('Delete this file?')) return;
+    if (!confirm('Delete this file?')) return false;
     try {
       await fetch('/api/files', {
         method: 'DELETE',
@@ -446,8 +446,10 @@ export default function Home() {
       });
       showToast('Deleted file');
       refreshAfterChange();
+      return true;
     } catch (err) {
       showToast('Delete failed');
+      return false;
     }
   };
 
@@ -1221,7 +1223,7 @@ export default function Home() {
             />
           )}
 
-          <div style={{ position: 'absolute', bottom: '20px', right: '20px', display: 'flex', gap: '8px' }}>
+          <div style={{ position: 'absolute', bottom: '20px', right: '20px', display: 'flex', gap: '8px', flexWrap: 'wrap', justifyContent: 'flex-end', maxWidth: 'calc(100vw - 40px)' }}>
             {!currentFolderFiles[lightboxIndex].isVideo && (
               <button
                 onClick={(e) => {
@@ -1247,6 +1249,19 @@ export default function Home() {
               }}
             >
               ⬇ Download
+            </button>
+            <button
+              onClick={async (e) => {
+                e.stopPropagation();
+                const deleted = await handleDelete(currentFolderFiles[lightboxIndex].url);
+                if (deleted) setLightboxIndex(null);
+              }}
+              style={{
+                padding: '8px 16px', background: '#e84057', color: 'white',
+                borderRadius: '8px', border: 'none', fontWeight: 600, fontSize: '14px', cursor: 'pointer'
+              }}
+            >
+              🗑 Delete
             </button>
           </div>
         </div>
