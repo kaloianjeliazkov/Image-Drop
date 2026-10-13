@@ -45,6 +45,7 @@ export default function Home() {
   const [annotations, setAnnotations] = useState([]);
   const [tempArrow, setTempArrow] = useState(null);
   const [editTool, setEditTool] = useState('arrow');
+  const [arrowColor, setArrowColor] = useState('#ff3b30'); // arrows: red (default) or green
   const [textDraft, setTextDraft] = useState(null);
   const [hoverAnn, setHoverAnn] = useState(false);
   const canvasRef = useRef(null);
@@ -618,7 +619,7 @@ export default function Home() {
         };
         // Dark edge first (like the text outline) so the arrow shows up on red or busy screenshots
         drawArrow('rgba(0,0,0,0.55)', 3 * k);
-        drawArrow('#ff3b30', 0);
+        drawArrow(a.color || '#ff3b30', 0);
       }
     };
     list.forEach(drawOne);
@@ -751,7 +752,7 @@ export default function Home() {
       const anchor = a.type === 'arrow' ? { x: a.x1, y: a.y1 } : { x: a.x, y: a.y };
       dragAnnRef.current = { index: idx, dx: p.x - anchor.x, dy: p.y - anchor.y };
     } else if (editTool === 'arrow') {
-      arrowRef.current = { x1: p.x, y1: p.y, x2: p.x, y2: p.y };
+      arrowRef.current = { x1: p.x, y1: p.y, x2: p.x, y2: p.y, color: arrowColor };
     } else {
       setTextDraft({ x: p.x, y: p.y, value: '' });
       return;
@@ -1361,6 +1362,24 @@ export default function Home() {
               {' • '}drag any text or arrow to move it • Ctrl+Z / Ctrl+Y
             </div>
             <div style={{ display: 'flex', gap: '8px', alignItems: 'center', justifyContent: 'center', flexWrap: 'wrap' }}>
+              <button
+                onClick={() => { setArrowColor('#ff3b30'); setEditTool('arrow'); }}
+                title="Draw arrows in red"
+                aria-label="Red arrow color"
+                style={{
+                  width: '26px', height: '26px', borderRadius: '50%', padding: 0, cursor: 'pointer',
+                  background: '#ff3b30', border: arrowColor === '#ff3b30' ? '3px solid #fff' : '3px solid rgba(255,255,255,0.25)'
+                }}
+              />
+              <button
+                onClick={() => { setArrowColor('#34c759'); setEditTool('arrow'); }}
+                title="Draw arrows in green"
+                aria-label="Green arrow color"
+                style={{
+                  width: '26px', height: '26px', borderRadius: '50%', padding: 0, cursor: 'pointer',
+                  background: '#34c759', border: arrowColor === '#34c759' ? '3px solid #fff' : '3px solid rgba(255,255,255,0.25)'
+                }}
+              />
               <button
                 onClick={() => setEditTool('arrow')}
                 style={editTool === 'arrow' ? btnPrimary : btnGhost}
