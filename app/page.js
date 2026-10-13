@@ -224,11 +224,23 @@ export default function Home() {
     const total = fileList.length;
     let successCount = 0;
 
+    // Files keep their real name (no timestamp). If a name is already used in the target folder,
+    // _2, _3, ... is appended (same rule as edited images), so nothing is silently overwritten.
+    const usedInBatch = new Set();
     for (let i = 0; i < total; i++) {
       const file = fileList[i];
       const ext = file.name.substring(file.name.lastIndexOf('.')) || '.bin';
-      const base = file.name.substring(0, file.name.lastIndexOf('.')).replace(/[^a-zA-Z0-9_-]/g, '_');
-      const pathname = `${folder}/${base}_${Date.now()}${ext}`;
+      const base = file.name.substring(0, file.name.lastIndexOf('.')).replace(/[^a-zA-Z0-9_-]/g, '_') || 'file';
+      const taken = new Set([
+        ...files.filter(f => f.folder === folder).map(f => f.name.toLowerCase()),
+        ...usedInBatch,
+      ]);
+      let filename = `${base}${ext}`;
+      for (let n = 2; taken.has(filename.toLowerCase()); n++) {
+        filename = `${base}_${n}${ext}`;
+      }
+      usedInBatch.add(filename.toLowerCase());
+      const pathname = `${folder}/${filename}`;
 
       setUploadStatus(`Uploading ${i + 1}/${total}: ${file.name}`);
 
