@@ -387,6 +387,7 @@ export default function Home() {
         try {
           const dirHandle = await window.showDirectoryPicker({ mode: 'readwrite' });
           customDirHandleRef.current = dirHandle;
+          folderLabel = dirHandle.name;
           setCustomDirHandle(dirHandle);
           setCustomDirName(dirHandle.name);
           setAutoSaveDirect(true);
@@ -403,6 +404,7 @@ export default function Home() {
 
     let savedCount = 0;
     const downloadedUrls = [];
+    let folderLabel = customDirName;
     for (let i = 0; i < filesToDownload.length; i++) {
       const file = filesToDownload[i];
       setZipProgress(`Saving ${i + 1}/${filesToDownload.length}: ${file.name}...`);
@@ -427,7 +429,7 @@ export default function Home() {
     setIsZipping(false);
     setZipProgress('');
     showToast(customDirHandleRef.current
-      ? `✓ Saved ${savedCount} file(s) to ${customDirName}!`
+      ? `✓ Saved ${savedCount} file(s) to ${folderLabel}!`
       : `✓ Downloaded ${savedCount} file(s) individually!`);
 
     // Auto delete if option enabled
