@@ -1198,29 +1198,88 @@ export default function Home() {
         </div>
       )}
 
-      {/* Image Editor */}
+      {/* Image Editor — same full-screen look as the lightbox, with the editing controls along the bottom */}
       {editingFile && (
         <div
-          onClick={() => setEditingFile(null)}
           style={{
             position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.92)', zIndex: 250,
-            display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px'
+            display: 'flex', flexDirection: 'column'
           }}
         >
-          <div
-            onClick={(e) => e.stopPropagation()}
+          <button
+            onClick={() => setEditingFile(null)}
             style={{
-              background: '#1e1e1e', border: '1px solid #333', borderRadius: '14px',
-              padding: '16px', maxWidth: '96vw', width: '100%', color: '#e8e8e8',
-              maxHeight: '96vh', overflowY: 'auto', boxSizing: 'border-box'
+              position: 'absolute', top: '20px', right: '20px', fontSize: '32px', color: 'white',
+              background: 'rgba(255,255,255,0.1)', border: 'none', borderRadius: '50%',
+              width: '44px', height: '44px', cursor: 'pointer', display: 'flex',
+              alignItems: 'center', justifyContent: 'center', zIndex: 2
             }}
           >
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
-              <h3 style={{ margin: 0, fontSize: '17px' }}>✏️ Edit image</h3>
-              <button onClick={() => setEditingFile(null)} style={{ background: 'none', border: 'none', color: '#888', fontSize: '20px', cursor: 'pointer' }}>✕</button>
-            </div>
+            ✕
+          </button>
 
-            <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap', marginBottom: '12px' }}>
+          {/* Photo (framed exactly like the lightbox) */}
+          <div style={{
+            flex: 1, minHeight: 0, display: 'flex', alignItems: 'center',
+            justifyContent: 'center', padding: '20px'
+          }}>
+            <div style={{ position: 'relative', display: 'inline-block' }}>
+              <canvas
+                ref={canvasRef}
+                onPointerDown={onCanvasPointerDown}
+                onPointerMove={onCanvasPointerMove}
+                onPointerUp={onCanvasPointerUp}
+                onPointerCancel={onCanvasPointerUp}
+                onPointerLeave={() => setHoverAnn(false)}
+                // Stop the browser moving focus off the text field we just opened (and selecting page text while dragging)
+                onMouseDown={(e) => e.preventDefault()}
+                style={{ display: 'block', maxWidth: '90vw', maxHeight: 'calc(100vh - 170px)', width: 'auto', height: 'auto', borderRadius: '8px', cursor: hoverAnn ? 'move' : editTool === 'text' ? 'text' : 'crosshair', background: '#000', touchAction: 'none' }}
+              />
+              {textDraft && (() => {
+                const canvas = canvasRef.current;
+                return (
+                  <input
+                    autoFocus
+                    value={textDraft.value}
+                    onChange={(e) => setTextDraft({ ...textDraft, value: e.target.value })}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') commitTextDraft();
+                      if (e.key === 'Escape') setTextDraft(null);
+                    }}
+                    onBlur={commitTextDraft}
+                    placeholder="Type text, Enter to place"
+                    style={{
+                      position: 'absolute',
+                      // The wrapper is exactly the canvas, so canvas coords map to percentages
+                      left: `${(textDraft.x / canvas.width) * 100}%`,
+                      top: `${(textDraft.y / canvas.height) * 100}%`,
+                      transform: 'translateY(-50%)',
+                      background: 'rgba(0,0,0,0.9)',
+                      color: '#fff',
+                      border: '1px solid #6c63ff',
+                      borderRadius: '6px',
+                      padding: '4px 8px',
+                      fontSize: '14px',
+                      outline: 'none',
+                      minWidth: '100px',
+                      zIndex: 10
+                    }}
+                  />
+                );
+              })()}
+            </div>
+          </div>
+
+          {/* Editing controls pinned to the bottom */}
+          <div style={{
+            background: 'rgba(18,18,18,0.97)', borderTop: '1px solid #333',
+            padding: '10px 16px 14px'
+          }}>
+            <div style={{ fontSize: '11px', color: '#777', marginBottom: '8px', textAlign: 'center' }}>
+              {editTool === 'arrow' ? 'Drag on the image to draw an arrow' : 'Click the image to place text'}
+              {' • '}drag any text or arrow to move it • Ctrl+Z / Ctrl+Y
+            </div>
+            <div style={{ display: 'flex', gap: '8px', alignItems: 'center', justifyContent: 'center', flexWrap: 'wrap' }}>
               <button
                 onClick={() => setEditTool('arrow')}
                 style={editTool === 'arrow' ? btnPrimary : btnGhost}
@@ -1237,69 +1296,14 @@ export default function Home() {
               </button>
               <button onClick={undo} style={btnGhost} title="Undo (Ctrl+Z)">↩ Undo</button>
               <button onClick={redo} style={btnGhost} title="Redo (Ctrl+Y)">↪ Redo</button>
-              <span style={{ fontSize: '12px', color: '#888' }}>
-                {editTool === 'arrow' ? 'Drag on the image to draw an arrow' : 'Click the image to place text'}
-                {' • '}drag any text or arrow to move it • Ctrl+Z / Ctrl+Y
-              </span>
-            </div>
-
-            <label style={{ fontSize: '13px', color: '#888', display: 'block', marginBottom: '6px' }}>File name</label>
-            <input
-              type="text"
-              value={editName}
-              onChange={(e) => setEditName(e.target.value)}
-              style={{ width: '100%', background: '#252525', border: '1px solid #333', color: '#e8e8e8', padding: '8px 12px', borderRadius: '8px', fontSize: '14px', outline: 'none', marginBottom: '12px', boxSizing: 'border-box' }}
-            />
-
-            <div style={{ display: 'flex', justifyContent: 'center' }}>
-              <div style={{ position: 'relative', display: 'inline-block', maxWidth: '100%' }}>
-                <canvas
-                  ref={canvasRef}
-                  onPointerDown={onCanvasPointerDown}
-                  onPointerMove={onCanvasPointerMove}
-                  onPointerUp={onCanvasPointerUp}
-                  onPointerCancel={onCanvasPointerUp}
-                  onPointerLeave={() => setHoverAnn(false)}
-                  // Stop the browser moving focus off the text field we just opened (and selecting page text while dragging)
-                  onMouseDown={(e) => e.preventDefault()}
-                  style={{ display: 'block', maxWidth: '100%', maxHeight: 'calc(96vh - 300px)', width: 'auto', height: 'auto', borderRadius: '8px', cursor: hoverAnn ? 'move' : editTool === 'text' ? 'text' : 'crosshair', background: '#000', touchAction: 'none' }}
-                />
-                {textDraft && (() => {
-                  const canvas = canvasRef.current;
-                  return (
-                    <input
-                      autoFocus
-                      value={textDraft.value}
-                      onChange={(e) => setTextDraft({ ...textDraft, value: e.target.value })}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter') commitTextDraft();
-                        if (e.key === 'Escape') setTextDraft(null);
-                      }}
-                      onBlur={commitTextDraft}
-                      placeholder="Type text, Enter to place"
-                      style={{
-                        position: 'absolute',
-                        // The wrapper is exactly the canvas, so canvas coords map to percentages
-                        left: `${(textDraft.x / canvas.width) * 100}%`,
-                        top: `${(textDraft.y / canvas.height) * 100}%`,
-                        transform: 'translateY(-50%)',
-                        background: 'rgba(0,0,0,0.9)',
-                        color: '#fff',
-                        border: '1px solid #6c63ff',
-                        borderRadius: '6px',
-                        padding: '4px 8px',
-                        fontSize: '14px',
-                        outline: 'none',
-                        minWidth: '100px',
-                        zIndex: 10
-                      }}
-                    />
-                  );
-                })()}
-              </div>
-            </div>
-
-            <div style={{ display: 'flex', gap: '8px', marginTop: '14px', justifyContent: 'flex-end', flexWrap: 'wrap' }}>
+              <input
+                type="text"
+                value={editName}
+                onChange={(e) => setEditName(e.target.value)}
+                placeholder="File name"
+                title="File name"
+                style={{ background: '#252525', border: '1px solid #333', color: '#e8e8e8', padding: '7px 12px', borderRadius: '8px', fontSize: '13px', outline: 'none', width: '160px' }}
+              />
               <button onClick={() => setEditingFile(null)} style={btnGhost}>Cancel</button>
               <button onClick={saveEditedImage} disabled={isUploading} style={btnPrimary}>
                 💾 Save to "{editingFile.folder} edited"
