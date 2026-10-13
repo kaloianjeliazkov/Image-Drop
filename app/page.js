@@ -439,22 +439,6 @@ export default function Home() {
     }
   };
 
-  // Silently delete files from blob store (for auto-delete on download)
-  const deleteFilesSilently = async (urls) => {
-    try {
-      await fetch('/api/files', {
-        method: 'DELETE',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ urls }),
-      });
-      setSelectedUrls(new Set());
-      refreshAfterChange();
-      showToast('🧹 Cleaned up downloaded files');
-    } catch (e) {
-      console.warn('Failed auto-delete cleanup:', e);
-    }
-  };
-
   // Delete selected files
   const handleDeleteSelected = async () => {
     if (selectedUrls.size === 0) return;
