@@ -571,6 +571,16 @@ export default function Home() {
     }
   };
 
+  // Sign out: clear the session cookie and go back to the login screen
+  const handleLogout = async () => {
+    try {
+      await fetch('/api/logout', { method: 'POST' });
+    } catch (err) {
+      console.warn('Logout failed', err);
+    }
+    window.location.href = '/login';
+  };
+
   // ---- Image editor ----
   const openEditor = (file) => {
     setEditingFile(file);
@@ -1221,6 +1231,13 @@ export default function Home() {
 
             <button onClick={() => setShowSettings(false)} style={{ ...btnGhost, width: '100%', padding: '10px' }}>
               Done
+            </button>
+
+            <button
+              onClick={handleLogout}
+              style={{ ...btnGhost, width: '100%', padding: '10px', marginTop: '8px', color: '#999' }}
+            >
+              Log out
             </button>
           </div>
         </div>
