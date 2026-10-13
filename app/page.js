@@ -20,6 +20,10 @@ const MAX_EDIT_DIM = 3000;
 // with the real resolution, so they look the same on screen and in the full-resolution export.
 const annK = (w, h) => Math.max(0.6, Math.min(6, Math.sqrt(w * h) / 1000));
 
+// Where an edit is saved: "android" -> "android edited", and an already-edited folder stays put
+// ("android edited" -> "android edited") instead of becoming "android edited edited".
+const editedFolderFor = (folder) => `${String(folder || 'general').replace(/\s+edited$/i, '')} edited`;
+
 export default function Home() {
   const [files, setFiles] = useState([]);
   const [folders, setFolders] = useState([]);
@@ -763,7 +767,7 @@ export default function Home() {
     if (!editingFile || !canvasRef.current || !img) return;
     const ext = (editingFile.name.substring(editingFile.name.lastIndexOf('.')) || '.jpg').toLowerCase();
     const mime = ext === '.png' ? 'image/png' : 'image/jpeg';
-    const folder = `${editingFile.folder} edited`;
+    const folder = editedFolderFor(editingFile.folder);
     // Save under exactly the name the user typed. Only strip characters that are illegal in a
     // path, and add _2, _3, ... if that name is already used in this folder.
     const fallback = editingFile.name.replace(/\.[^.]+$/, '') || 'image';
@@ -1324,7 +1328,7 @@ export default function Home() {
               />
               <button onClick={() => setEditingFile(null)} style={btnGhost}>Cancel</button>
               <button onClick={saveEditedImage} disabled={isUploading} style={btnPrimary}>
-                💾 Save to "{editingFile.folder} edited"
+                💾 Save to "{editedFolderFor(editingFile.folder)}"
               </button>
             </div>
           </div>
