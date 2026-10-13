@@ -24,6 +24,9 @@ const annK = (w, h) => Math.max(0.6, Math.min(6, Math.sqrt(w * h) / 1000));
 // ("android edited" -> "android edited") instead of becoming "android edited edited".
 const editedFolderFor = (folder) => `${String(folder || 'general').replace(/\s+edited$/i, '')} edited`;
 
+// Folders like "android edited edited" came from an old bug and should never be shown or kept
+const isStrayEditFolder = (name) => /(?:\s+edited){2,}$/i.test(String(name || ''));
+
 export default function Home() {
   const [files, setFiles] = useState([]);
   const [folders, setFolders] = useState([]);
@@ -90,8 +93,13 @@ export default function Home() {
     if (savedKnownFolders) {
       try {
         const parsed = JSON.parse(savedKnownFolders);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          setKnownFolders(parsed);
+        if (Array.isArray(parsed)) {
+          // Drop leftover "android edited edited" style folders from an old bug
+          const cleaned = parsed.filter(name => !isStrayEditFolder(name));
+          if (cleaned.length > 0) setKnownFolders(cleaned);
+          if (cleaned.length !== parsed.length) {
+            localStorage.setItem('image_drop_known_folders', JSON.stringify(cleaned));
+          }
         }
       } catch (e) {}
     }
@@ -131,7 +139,9 @@ export default function Home() {
 
       // Merge permanent + known folders + folders from files so android/ios always remain visible
       setKnownFolders(prev => {
-        const combined = Array.from(new Set([...PERMANENT_FOLDERS, ...prev, ...Object.keys(folderMap)]));
+        const combined = Array.from(new Set([...PERMANENT_FOLDERS, ...prev, ...Object.keys(folderMap)]))
+          // Hide stray "… edited edited" folders, but keep them while they still hold files
+          .filter(name => !isStrayEditFolder(name) || (folderMap[name] || 0) > 0);
         localStorage.setItem('image_drop_known_folders', JSON.stringify(combined));
 
         const folderList = combined.map(name => ({
