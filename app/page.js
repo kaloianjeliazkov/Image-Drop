@@ -763,9 +763,18 @@ export default function Home() {
     if (!editingFile || !canvasRef.current || !img) return;
     const ext = (editingFile.name.substring(editingFile.name.lastIndexOf('.')) || '.jpg').toLowerCase();
     const mime = ext === '.png' ? 'image/png' : 'image/jpeg';
-    const base = (editName.trim() || editingFile.name).replace(/\.[^.]+$/, '').replace(/[^a-zA-Z0-9_-]/g, '_');
     const folder = `${editingFile.folder} edited`;
-    const pathname = `${folder}/${base}_edited_${Date.now()}${ext === '.png' ? '.png' : '.jpg'}`;
+    // Save under exactly the name the user typed. Only strip characters that are illegal in a
+    // path, and add _2, _3, ... if that name is already used in this folder.
+    const fallback = editingFile.name.replace(/\.[^.]+$/, '') || 'image';
+    const typed = (editName.trim() || fallback).replace(/[\\/:*?"<>|]/g, '').replace(/^\.+/, '').trim() || 'image';
+    const outExt = ext === '.png' ? '.png' : '.jpg';
+    const taken = new Set(files.filter(f => f.folder === folder).map(f => f.name.toLowerCase()));
+    let filename = `${typed}${outExt}`;
+    for (let n = 2; taken.has(filename.toLowerCase()); n++) {
+      filename = `${typed}_${n}${outExt}`;
+    }
+    const pathname = `${folder}/${filename}`;
     setIsUploading(true);
     setUploadStatus(`Saving edited image to "${folder}"...`);
     try {
@@ -778,7 +787,7 @@ export default function Home() {
       const blob = await new Promise(res => out.toBlob(res, mime, 0.92));
       if (!blob) throw new Error('Could not render image');
       await upload(pathname, blob, { access: 'public', handleUploadUrl: '/api/upload' });
-      showToast(`✓ Saved to "${folder}"`);
+      showToast(`✓ Saved as "${filename}"`);
       setEditingFile(null);
       setCurrentFolder(folder);
       refreshAfterChange();

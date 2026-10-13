@@ -10,6 +10,7 @@ export async function POST(request) {
       request,
       onBeforeGenerateToken: async (pathname) => {
         return {
+          addRandomSuffix: false, // keep the exact filename we send (no random suffix)
           maximumSizeInBytes: 250 * 1024 * 1024, // 250 MB
         };
       },
