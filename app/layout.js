@@ -1,5 +1,5 @@
 export const metadata = {
-  title: 'Image Drop',
+  title: 'Koldrop',
   description: 'Upload images & screen recordings seamlessly across phone and laptop',
   icons: {
     icon: '/icon.svg',

@@ -5,8 +5,9 @@ import { upload } from '@vercel/blob/client';
 import JSZip from 'jszip';
 import { saveAs } from 'file-saver';
 
-// Permanent folders: always visible as tabs and upload targets, even when empty
-const PERMANENT_FOLDERS = ['android', 'ios'];
+// Permanent folders: always visible as tabs and upload targets, even when empty.
+// These four can never be deleted, with android/ios pinned to the left.
+const PERMANENT_FOLDERS = ['android', 'ios', 'android edited', 'ios edited'];
 
 // Biggest canvas iOS Safari can export (4096 x 4096 worth of pixels); larger photos are scaled down to this when saving edits
 const MAX_EXPORT_PIXELS = 4096 * 4096;
@@ -35,6 +36,10 @@ export default function Home() {
   const editImageRef = useRef(null);
   const arrowRef = useRef(null);
   const dragAnnRef = useRef(null);
+  // Undo / redo history for annotations
+  const annotationsRef = useRef([]);
+  const undoStackRef = useRef([]);
+  const redoStackRef = useRef([]);
   
   // Multi-select & Batch features
   const [selectedUrls, setSelectedUrls] = useState(new Set());
@@ -486,6 +491,9 @@ export default function Home() {
     setEditingFile(file);
     setEditName(file.name.substring(0, file.name.lastIndexOf('.')) || file.name);
     setAnnotations([]);
+    annotationsRef.current = [];
+    undoStackRef.current = [];
+    redoStackRef.current = [];
     setTempArrow(null);
     setTextDraft(null);
     setHoverAnn(false);
@@ -565,6 +573,25 @@ export default function Home() {
     paintEdit(canvas, tempArrow ? [...annotations, tempArrow] : annotations);
   };
 
+  // ---- Undo / redo history ----
+  const snapshot = (list) => JSON.parse(JSON.stringify(list || []));
+  const pushUndo = () => {
+    undoStackRef.current.push(snapshot(annotationsRef.current));
+    redoStackRef.current = [];
+  };
+  const undo = () => {
+    if (undoStackRef.current.length === 0) return;
+    redoStackRef.current.push(snapshot(annotationsRef.current));
+    setTextDraft(null);
+    setAnnotations(undoStackRef.current.pop());
+  };
+  const redo = () => {
+    if (redoStackRef.current.length === 0) return;
+    undoStackRef.current.push(snapshot(annotationsRef.current));
+    setTextDraft(null);
+    setAnnotations(redoStackRef.current.pop());
+  };
+
   // Load the image once when the editor opens
   useEffect(() => {
     if (!editingFile) { editImageRef.current = null; return; }
@@ -594,6 +621,32 @@ export default function Home() {
   useEffect(() => {
     if (editingFile) redraw();
   }, [annotations, tempArrow]);
+
+  // Keep a ref of the annotations in sync (used by undo/redo)
+  useEffect(() => {
+    annotationsRef.current = annotations;
+  }, [annotations]);
+
+  // Undo (Ctrl+Z) / Redo (Ctrl+Y or Ctrl+Shift+Z) while editing
+  useEffect(() => {
+    if (!editingFile) return;
+    const onKeyDown = (e) => {
+      const tag = (e.target && e.target.tagName) || '';
+      if (tag === 'INPUT' || tag === 'TEXTAREA') return; // let inputs handle their own undo
+      const mod = e.ctrlKey || e.metaKey;
+      if (!mod) return;
+      const key = (e.key || '').toLowerCase();
+      if (key === 'z' && !e.shiftKey) {
+        e.preventDefault();
+        undo();
+      } else if (key === 'y' || (key === 'z' && e.shiftKey)) {
+        e.preventDefault();
+        redo();
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [editingFile]);
 
   const distToSegment = (p, a, b) => {
     const dx = b.x - a.x;
@@ -635,6 +688,7 @@ export default function Home() {
     const idx = findAnnotationAt(p);
     if (idx >= 0) {
       // Drag the existing annotation (text or arrow), in any tool mode
+      pushUndo();
       const a = annotations[idx];
       const anchor = a.type === 'arrow' ? { x: a.x1, y: a.y1 } : { x: a.x, y: a.y };
       dragAnnRef.current = { index: idx, dx: p.x - anchor.x, dy: p.y - anchor.y };
@@ -679,6 +733,7 @@ export default function Home() {
     // before React re-renders with the last move, and the arrow used to be dropped
     const arrow = arrowRef.current;
     if (arrow && Math.hypot(arrow.x2 - arrow.x1, arrow.y2 - arrow.y1) >= 8) {
+      pushUndo();
       setAnnotations(prev => [...prev, { type: 'arrow', ...arrow }]);
     }
     arrowRef.current = null;
@@ -688,6 +743,7 @@ export default function Home() {
 
   const commitTextDraft = () => {
     if (textDraft && textDraft.value.trim()) {
+      pushUndo();
       setAnnotations(prev => [...prev, { type: 'text', x: textDraft.x, y: textDraft.y, text: textDraft.value.trim() }]);
     }
     setTextDraft(null);
@@ -757,7 +813,7 @@ export default function Home() {
           title="Refresh"
           style={{ margin: 0, fontSize: '20px', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', userSelect: 'none' }}
         >
-          <span>📸</span> Image Drop
+          <span>📸</span> Koldrop
         </h1>
         <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
           <button onClick={() => setShowSettings(true)} style={btnGhost} title="Settings & Download Location">
@@ -832,21 +888,6 @@ export default function Home() {
                 }}>
                   {f.count}
                 </span>
-                {!PERMANENT_FOLDERS.includes(f.name) && (
-                  <button
-                    onClick={(e) => handleDeleteFolder(f.name, e)}
-                    title={`Delete folder "${f.name}"`}
-                    style={{
-                      background: 'none', border: 'none', color: 'inherit',
-                      opacity: 0.6, cursor: 'pointer', padding: '0 2px', fontSize: '14px',
-                      lineHeight: 1
-                    }}
-                    onMouseEnter={(e) => e.target.style.opacity = '1'}
-                    onMouseLeave={(e) => e.target.style.opacity = '0.6'}
-                  >
-                    ✕
-                  </button>
-                )}
               </div>
             ))}
           </div>
@@ -1194,9 +1235,11 @@ export default function Home() {
               >
                 🅣 Add text
               </button>
+              <button onClick={undo} style={btnGhost} title="Undo (Ctrl+Z)">↩ Undo</button>
+              <button onClick={redo} style={btnGhost} title="Redo (Ctrl+Y)">↪ Redo</button>
               <span style={{ fontSize: '12px', color: '#888' }}>
                 {editTool === 'arrow' ? 'Drag on the image to draw an arrow' : 'Click the image to place text'}
-                {' • '}drag any text or arrow to move it
+                {' • '}drag any text or arrow to move it • Ctrl+Z / Ctrl+Y
               </span>
             </div>
 
