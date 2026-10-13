@@ -90,22 +90,32 @@ export async function GET(request) {
     }
 
     // First run for this store: pull the existing blobs into the index once
-    const { count, error: countError } = await supabaseAdmin
-      .from(FILES_TABLE)
-      .select('pathname', { count: 'exact', head: true });
-    if (countError) throw countError;
-    if (!count) await seedIndexFromBlob();
+    try {
+      const { count, error: countError } = await supabaseAdmin
+        .from(FILES_TABLE)
+        .select('pathname', { count: 'exact', head: true });
+      if (countError) throw countError;
+      if (!count) await seedIndexFromBlob();
 
-    const { data, error } = await supabaseAdmin
-      .from(FILES_TABLE)
-      .select('*')
-      .order('uploaded_at', { ascending: false });
-    if (error) throw error;
+      const { data, error } = await supabaseAdmin
+        .from(FILES_TABLE)
+        .select('*')
+        .order('uploaded_at', { ascending: false });
+      if (error) throw error;
 
-    const files = (data || []).map(rowToFile);
-    cachedFiles = files;
-    lastCacheTime = now;
-    return NextResponse.json({ files });
+      const files = (data || []).map(rowToFile);
+      cachedFiles = files;
+      lastCacheTime = now;
+      return NextResponse.json({ files });
+    } catch (indexError) {
+      // The index is configured but not usable (usually the table has not been created yet).
+      // Fall back to listing Blob so the app keeps working instead of showing nothing.
+      console.error('Supabase index unavailable, using Blob list:', indexError.message);
+      const files = await listBlobFiles();
+      cachedFiles = files;
+      lastCacheTime = now;
+      return NextResponse.json({ files, indexError: indexError.message });
+    }
   } catch (error) {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
