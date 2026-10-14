@@ -235,6 +235,11 @@ export default function LoginPage() {
             <><button type="button" style={linkStyle} onClick={() => switchMode('signin')}>Back to sign in</button></>
           )}
         </p>
+        <p style={{ margin: '14px 0 0', textAlign: 'center', fontSize: '12px', color: '#666' }}>
+          <a href="/privacy" style={{ color: '#888' }}>Privacy</a>
+          {' · '}
+          <a href="/terms" style={{ color: '#888' }}>Terms</a>
+        </p>
       </form>
     </div>
   );
