@@ -1,32 +1,49 @@
 import { NextResponse } from 'next/server';
-import { SESSION_COOKIE, sessionToken } from './lib/session';
+import { createServerClient } from '@supabase/ssr';
+import { SUPABASE_URL, SUPABASE_ANON_KEY } from './lib/supabase/config';
 
-// Public routes that must stay reachable without a session.
-const PUBLIC_PATHS = ['/login', '/api/login', '/api/logout'];
+// Routes reachable without being signed in.
+const PUBLIC_PATHS = ['/login', '/auth/callback', '/reset-password', '/privacy', '/terms'];
 
 export async function middleware(request) {
+  let response = NextResponse.next({ request });
+
+  const supabase = createServerClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+    cookies: {
+      getAll() {
+        return request.cookies.getAll();
+      },
+      setAll(cookiesToSet) {
+        cookiesToSet.forEach(({ name, value }) => request.cookies.set(name, value));
+        response = NextResponse.next({ request });
+        cookiesToSet.forEach(({ name, value, options }) => response.cookies.set(name, value, options));
+      },
+    },
+  });
+
+  // Verifies the session and refreshes it when it is about to expire (writes new cookies above).
+  const { data } = await supabase.auth.getClaims();
+  const signedIn = Boolean(data?.claims?.sub);
+
   const { pathname } = request.nextUrl;
-  const token = request.cookies.get(SESSION_COOKIE)?.value;
-  const expected = await sessionToken();
 
   if (PUBLIC_PATHS.includes(pathname)) {
-    // Already signed in? Don't show the login page again.
-    if (pathname === '/login' && token === expected) {
+    if (pathname === '/login' && signedIn) {
       return NextResponse.redirect(new URL('/', request.url));
     }
-    return NextResponse.next();
+    return response;
   }
 
-  if (token !== expected) {
+  if (!signedIn) {
     if (pathname.startsWith('/api/')) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
     const url = new URL('/login', request.url);
-    url.searchParams.set('next', pathname === '/' ? '/' : pathname);
+    if (pathname !== '/') url.searchParams.set('next', pathname);
     return NextResponse.redirect(url);
   }
 
-  return NextResponse.next();
+  return response;
 }
 
 // Gate everything except static assets and the Next.js internals.

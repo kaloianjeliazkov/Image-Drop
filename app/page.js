@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
-import { upload } from '@vercel/blob/client';
+import { uploadFile } from '../lib/upload';
 import JSZip from 'jszip';
 import { saveAs } from 'file-saver';
 
@@ -29,6 +29,7 @@ const isStrayEditFolder = (name) => /(?:\s+edited){2,}$/i.test(String(name || ''
 
 export default function Home() {
   const [files, setFiles] = useState([]);
+  const [userEmail, setUserEmail] = useState('');
   const [folders, setFolders] = useState([]);
   const [currentFolder, setCurrentFolder] = useState('');
   const [folderInput, setFolderInput] = useState('');
@@ -131,6 +132,7 @@ export default function Home() {
       if (seq !== loadSeqRef.current) return;
       const loaded = data.files || [];
       setFiles(loaded);
+      if (data.user?.email) setUserEmail(data.user.email);
 
       // Extract unique folders from uploaded files
       const folderMap = {};
@@ -189,26 +191,6 @@ export default function Home() {
     loadFiles(true);
   };
 
-  // Record a finished upload in the Supabase index. Server-side no-op until Supabase env vars
-  // are configured, and never allowed to fail an upload that otherwise succeeded.
-  const indexFile = async (blob, size) => {
-    if (!blob || !blob.url) return;
-    try {
-      await fetch('/api/files', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          pathname: blob.pathname,
-          url: blob.url,
-          downloadUrl: blob.downloadUrl,
-          size: size ?? 0,
-        }),
-      });
-    } catch (err) {
-      console.warn('Index update failed:', err);
-    }
-  };
-
   useEffect(() => {
     loadFiles();
   }, [currentFolder]);
@@ -248,11 +230,7 @@ export default function Home() {
       setUploadStatus(`Uploading ${i + 1}/${total}: ${file.name}`);
 
       try {
-        const uploaded = await upload(pathname, file, {
-          access: 'public',
-          handleUploadUrl: '/api/upload',
-        });
-        await indexFile(uploaded, file.size);
+        await uploadFile(pathname, file);
         successCount++;
         setUploadProgress(Math.round(((i + 1) / total) * 100));
       } catch (err) {
@@ -542,7 +520,7 @@ export default function Home() {
     }
   };
 
-  // Silently delete files from blob store (for auto-delete on download)
+  // Silently delete files from storage (for auto-delete on download)
   const deleteFilesSilently = async (urls) => {
     try {
       await fetch('/api/files', {
@@ -576,13 +554,15 @@ export default function Home() {
     }
   };
 
-  // Sign out: clear the session cookie and go back to the login screen
+  // Sign out: end the Supabase session, forget this account's folders, back to the login screen
   const handleLogout = async () => {
     try {
       await fetch('/api/logout', { method: 'POST' });
     } catch (err) {
       console.warn('Logout failed', err);
     }
+    localStorage.removeItem('image_drop_known_folders');
+    localStorage.removeItem('image_drop_last_folder');
     window.location.href = '/login';
   };
 
@@ -878,8 +858,7 @@ export default function Home() {
       paintEdit(out, annotations);
       const blob = await new Promise(res => out.toBlob(res, mime, 0.92));
       if (!blob) throw new Error('Could not render image');
-      const uploaded = await upload(pathname, blob, { access: 'public', handleUploadUrl: '/api/upload' });
-      await indexFile(uploaded, blob.size);
+      await uploadFile(pathname, blob);
       showToast(`✓ Saved as "${filename}"`);
       setEditingFile(null);
       setCurrentFolder(folder);
@@ -1242,7 +1221,7 @@ export default function Home() {
               onClick={handleLogout}
               style={{ ...btnGhost, width: '100%', padding: '10px', marginTop: '8px', color: '#999' }}
             >
-              Log out
+              Log out{userEmail ? ` (${userEmail})` : ''}
             </button>
           </div>
         </div>
