@@ -27,6 +27,9 @@ export async function middleware(request) {
 
   const { pathname } = request.nextUrl;
 
+  // Vercel Cron calls these; the route itself checks the CRON_SECRET header.
+  if (pathname.startsWith('/api/cron/')) return response;
+
   if (PUBLIC_PATHS.includes(pathname)) {
     if (pathname === '/login' && signedIn) {
       return NextResponse.redirect(new URL('/', request.url));

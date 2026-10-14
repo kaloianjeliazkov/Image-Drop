@@ -15,17 +15,20 @@ export async function GET(request, { params }) {
 
   const { data: row, error } = await supabase
     .from(FILES_TABLE)
-    .select('storage_key, name')
+    .select('storage_key, thumb_key, name')
     .eq('id', params.id)
     .maybeSingle();
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
   if (!row) return NextResponse.json({ error: 'Not found' }, { status: 404 });
 
-  const download = new URL(request.url).searchParams.get('download') === '1';
+  const params2 = new URL(request.url).searchParams;
+  const download = params2.get('download') === '1';
+  // ?thumb=1 serves the small gallery preview when there is one
+  const key = params2.get('thumb') === '1' && row.thumb_key ? row.thumb_key : row.storage_key;
   // Ownership was just checked through RLS above, so signing with the service role is safe.
   const { data, error: signError } = await getAdmin().storage
     .from(BUCKET)
-    .createSignedUrl(row.storage_key, SIGNED_URL_SECONDS, download ? { download: row.name } : undefined);
+    .createSignedUrl(key, SIGNED_URL_SECONDS, download ? { download: row.name } : undefined);
   if (signError || !data?.signedUrl) {
     return NextResponse.json({ error: signError?.message || 'Could not sign URL' }, { status: 500 });
   }

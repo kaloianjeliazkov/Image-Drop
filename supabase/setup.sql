@@ -16,6 +16,9 @@ create table if not exists public.user_files (
   unique (user_id, folder, name)
 );
 
+-- Small JPEG preview for the gallery (added later, so also added to existing tables)
+alter table public.user_files add column if not exists thumb_key text;
+
 create index if not exists user_files_user_uploaded_idx
   on public.user_files (user_id, uploaded_at desc);
 
