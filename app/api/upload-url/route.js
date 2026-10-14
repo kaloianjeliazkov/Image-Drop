@@ -3,6 +3,7 @@ import { NextResponse } from 'next/server';
 import { createClient, getUser } from '../../../lib/supabase/server';
 import { getAdmin } from '../../../lib/supabase/admin';
 import { BUCKET, MAX_UPLOAD_BYTES } from '../../../lib/supabase/config';
+import { quotaFor, quotaMessage } from '../../../lib/quota';
 
 export const dynamic = 'force-dynamic';
 
@@ -31,6 +32,12 @@ export async function POST(request) {
         { status: 413 }
       );
     }
+    // Quick check against the per-user limit (enforced again with the real size when saving)
+    const { used, limit } = await quotaFor(supabase, user);
+    if (limit !== null && used + Number(size || 0) > limit) {
+      return NextResponse.json({ error: quotaMessage(used, limit) }, { status: 413 });
+    }
+
     const name = String(filename || '');
     const dot = name.lastIndexOf('.');
     const ext = dot >= 0 ? name.slice(dot).toLowerCase().replace(/[^a-z0-9.]/g, '').slice(0, 10) : '';
