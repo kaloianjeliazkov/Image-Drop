@@ -14,7 +14,17 @@ export async function POST(request) {
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
   try {
-    const { filename, size } = await request.json();
+    const { filename, size, thumb } = await request.json();
+    if (thumb) {
+      // Gallery preview: always a small JPEG next to the user's files
+      if (Number(size) > 2 * 1000 * 1000) {
+        return NextResponse.json({ error: 'Thumbnail too large' }, { status: 413 });
+      }
+      const key = `${user.id}/thumbs/${randomUUID()}.jpg`;
+      const { data, error } = await getAdmin().storage.from(BUCKET).createSignedUploadUrl(key);
+      if (error) throw error;
+      return NextResponse.json({ key, token: data.token });
+    }
     if (Number(size) > MAX_UPLOAD_BYTES) {
       return NextResponse.json(
         { error: `File is too large (max ${Math.round(MAX_UPLOAD_BYTES / 1e6)} MB)` },

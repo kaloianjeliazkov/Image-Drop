@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
-import { uploadFile } from '../lib/upload';
+import { uploadFile, backfillThumbnail } from '../lib/upload';
 import JSZip from 'jszip';
 import { saveAs } from 'file-saver';
 
@@ -70,7 +70,8 @@ export default function Home() {
   const [autoSaveDirect, setAutoSaveDirect] = useState(false);
   // Mirrors customDirHandle so a folder picked mid-call is usable right away (state lags a render)
   const customDirHandleRef = useRef(null);
-  const [deleteAfterDownload, setDeleteAfterDownload] = useState(false);
+  // Files are always removed from cloud storage once downloaded (keeps everyone inside the free storage)
+  const deleteAfterDownload = true;
   const [knownFolders, setKnownFolders] = useState([]);
 
   const fileInputRef = useRef(null);
@@ -89,10 +90,7 @@ export default function Home() {
       setCurrentFolder(saved);
       setFolderInput(saved);
     }
-    const savedDeleteSetting = localStorage.getItem('image_drop_delete_after_download');
-    if (savedDeleteSetting !== null) {
-      setDeleteAfterDownload(savedDeleteSetting === 'true');
-    }
+    localStorage.removeItem('image_drop_delete_after_download'); // old setting, no longer used
     const savedKnownFolders = localStorage.getItem('image_drop_known_folders');
     if (savedKnownFolders) {
       try {
@@ -1097,7 +1095,11 @@ export default function Home() {
                     </div>
                   ) : (
                     <img
-                      src={file.url}
+                      // Small preview when there is one; otherwise the full image, loaded with
+                      // CORS so a preview can be made from it once (backfill for older files)
+                      src={file.thumbUrl || file.url}
+                      crossOrigin={file.thumbUrl ? undefined : 'anonymous'}
+                      onLoad={file.thumbUrl ? undefined : (e) => backfillThumbnail(file, e.currentTarget)}
                       alt={file.name}
                       loading="lazy"
                       onClick={() => setLightboxIndex(idx)}
@@ -1181,30 +1183,6 @@ export default function Home() {
               <button onClick={handlePickDirectory} style={btnPrimary}>
                 📁 {customDirName ? 'Change Folder' : 'Choose Download Folder'}
               </button>
-
-              <hr style={{ border: 'none', borderTop: '1px solid #333', margin: '20px 0' }} />
-
-              <div>
-                <label style={{ display: 'flex', alignItems: 'center', gap: '10px', cursor: 'pointer', userSelect: 'none' }}>
-                  <input
-                    type="checkbox"
-                    checked={deleteAfterDownload}
-                    onChange={(e) => {
-                      const val = e.target.checked;
-                      setDeleteAfterDownload(val);
-                      localStorage.setItem('image_drop_delete_after_download', val.toString());
-                      showToast(val ? 'Auto-delete after download enabled' : 'Auto-delete after download disabled');
-                    }}
-                    style={{ width: '18px', height: '18px', cursor: 'pointer' }}
-                  />
-                  <span>
-                    <strong>Auto-delete after download:</strong>
-                    <div style={{ fontSize: '12px', color: '#888', marginTop: '2px' }}>
-                      Automatically remove files from cloud storage once downloaded to keep storage clean.
-                    </div>
-                  </span>
-                </label>
-              </div>
 
               <hr style={{ border: 'none', borderTop: '1px solid #333', margin: '20px 0' }} />
 

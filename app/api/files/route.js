@@ -25,7 +25,11 @@ const rowToFile = (row) => ({
   size: row.size,
   uploadedAt: row.uploaded_at,
   isVideo: row.is_video,
+  // Small preview for the gallery grid (null until one exists — the grid then uses `url`)
+  thumbUrl: row.thumb_key ? `${fileUrl(row.id)}?thumb=1` : null,
 });
+
+const ownsKey = (user, key) => typeof key === 'string' && key.startsWith(`${user.id}/`) && !key.includes('..');
 
 // The signed-in user's files (row-level security filters to their own rows).
 export async function GET() {
@@ -50,16 +54,18 @@ export async function GET() {
 }
 
 // Record a file the browser just uploaded to storage.
-// Body: { key, pathname: "folder/name.jpg", size, contentType }
+// Body: { key, thumbKey?, pathname: "folder/name.jpg", size, contentType }
 export async function POST(request) {
   const supabase = createClient();
   const user = await getUser(supabase);
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
   let key;
+  let thumbKey = null;
   try {
     const body = await request.json();
     key = String(body.key || '');
+    thumbKey = ownsKey(user, body.thumbKey) ? body.thumbKey : null;
     const pathname = String(body.pathname || '');
     if (!key.startsWith(`${user.id}/`)) {
       return NextResponse.json({ error: 'Invalid storage key' }, { status: 400 });
@@ -74,6 +80,7 @@ export async function POST(request) {
       .insert({
         user_id: user.id,
         storage_key: key,
+        thumb_key: thumbKey,
         folder,
         name,
         size: Number(body.size) || 0,
@@ -88,7 +95,7 @@ export async function POST(request) {
   } catch (error) {
     // Don't leave an orphaned object in storage if the row could not be written.
     if (key && key.startsWith(`${user.id}/`)) {
-      await getAdmin().storage.from(BUCKET).remove([key]).catch(() => {});
+      await getAdmin().storage.from(BUCKET).remove([key, thumbKey].filter(Boolean)).catch(() => {});
     }
     const duplicate = error?.code === '23505';
     return NextResponse.json(
@@ -115,17 +122,51 @@ export async function DELETE(request) {
       .from(FILES_TABLE)
       .delete()
       .in('id', ids)
-      .select('storage_key');
+      .select('storage_key, thumb_key');
     if (error) throw error;
 
-    const keys = (rows || []).map((r) => r.storage_key);
+    // Remove the files and their thumbnails from storage
+    const keys = (rows || []).flatMap((r) => [r.storage_key, r.thumb_key]).filter(Boolean);
     for (let i = 0; i < keys.length; i += 1000) {
       const { error: rmError } = await getAdmin().storage.from(BUCKET).remove(keys.slice(i, i + 1000));
       if (rmError) console.error('Storage remove failed:', rmError.message);
     }
 
-    return NextResponse.json({ success: true, deleted: keys.length });
+    return NextResponse.json({ success: true, deleted: (rows || []).length });
   } catch (error) {
+    return NextResponse.json({ error: error.message }, { status: 500 });
+  }
+}
+
+// Attach a thumbnail to an existing file (backfill for files uploaded before thumbnails).
+// Body: { url: "/api/f/<id>", thumbKey }
+export async function PATCH(request) {
+  const supabase = createClient();
+  const user = await getUser(supabase);
+  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+
+  let thumbKey = null;
+  try {
+    const body = await request.json();
+    const id = idFromUrl(body.url);
+    thumbKey = ownsKey(user, body.thumbKey) ? body.thumbKey : null;
+    if (!id || !thumbKey) return NextResponse.json({ error: 'url and thumbKey are required' }, { status: 400 });
+
+    // Only fills an empty slot, and RLS limits it to the user's own row.
+    const { data, error } = await supabase
+      .from(FILES_TABLE)
+      .update({ thumb_key: thumbKey })
+      .eq('id', id)
+      .is('thumb_key', null)
+      .select('id');
+    if (error) throw error;
+    if (!data?.length) {
+      await getAdmin().storage.from(BUCKET).remove([thumbKey]).catch(() => {});
+      return NextResponse.json({ success: true, skipped: true });
+    }
+    return NextResponse.json({ success: true });
+  } catch (error) {
+    if (thumbKey) await getAdmin().storage.from(BUCKET).remove([thumbKey]).catch(() => {});
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 }
