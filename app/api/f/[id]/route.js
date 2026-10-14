@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '../../../../lib/supabase/server';
+import { getAdmin } from '../../../../lib/supabase/admin';
 import { BUCKET, FILES_TABLE } from '../../../../lib/supabase/config';
 
 export const dynamic = 'force-dynamic';
@@ -21,7 +22,8 @@ export async function GET(request, { params }) {
   if (!row) return NextResponse.json({ error: 'Not found' }, { status: 404 });
 
   const download = new URL(request.url).searchParams.get('download') === '1';
-  const { data, error: signError } = await supabase.storage
+  // Ownership was just checked through RLS above, so signing with the service role is safe.
+  const { data, error: signError } = await getAdmin().storage
     .from(BUCKET)
     .createSignedUrl(row.storage_key, SIGNED_URL_SECONDS, download ? { download: row.name } : undefined);
   if (signError || !data?.signedUrl) {

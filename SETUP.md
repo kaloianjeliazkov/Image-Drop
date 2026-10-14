@@ -11,12 +11,12 @@ file size limit to match.
 
 ---
 
-## 1. Create the table, bucket and security rules
+## 1. Database and storage (automatic)
 
-Supabase → **SQL Editor** → paste all of [`supabase/setup.sql`](supabase/setup.sql) → **Run**.
-
-That creates the `user_files` table, the private `files` bucket, and rules so each user can only
-read, upload and delete under their own folder.
+Your Vercel project gets its Supabase variables from Vercel's Supabase integration, so there is
+nothing to copy. Every build runs `scripts/setup-db.mjs` first, which applies
+[`supabase/setup.sql`](supabase/setup.sql) (the `user_files` table and its row-level security)
+and creates the private `files` bucket. Look for `[setup-db]` lines in the Vercel build log.
 
 ## 2. Tell Supabase where the app lives
 
@@ -48,48 +48,21 @@ accounts work instantly.
 
 ## 4. Vercel environment variables
 
-Vercel → project → **Settings → Environment Variables** (Production, Preview, Development):
-
-```
-NEXT_PUBLIC_SUPABASE_URL=https://YOUR-PROJECT-ref.supabase.co
-NEXT_PUBLIC_SUPABASE_ANON_KEY=your-anon-or-publishable-key
-```
-
-Both are in Supabase → **Project Settings → API keys**. Use the **anon / publishable** key here,
-never the service-role / secret key.
-
-You can delete these old variables — nothing reads them any more:
-`APP_USERNAME`, `APP_PASSWORD`, `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`.
-Keep `BLOB_READ_WRITE_TOKEN` until the migration below is done.
-
-Redeploy.
+Already set by the Supabase integration: `NEXT_PUBLIC_SUPABASE_URL`,
+`NEXT_PUBLIC_SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY` and the `POSTGRES_*` URLs.
+The service-role key is only used on the server, for storage, after the app has checked that the
+file belongs to the signed-in user.
 
 ## 5. Move your old files into your account
 
-1. Open the deployed app and **create your account** (same email you'll use below).
-2. On your computer, in the project folder, run `npm install`, then create `.env.migrate`:
+1. Open the deployed app and **create your account**.
+2. In Vercel, add the env var `MIGRATE_BLOB_TO_EMAIL=<that email>` and redeploy.
+   The build copies every Blob file into your account (folders, names and dates kept) and the
+   build log lists anything it couldn't copy, e.g. files over 50 MB. Safe to run again.
+3. Remove `MIGRATE_BLOB_TO_EMAIL`, check your files, then you can delete the Blob store and drop
+   the old table with `drop table if exists public.files;`.
 
-   ```
-   BLOB_READ_WRITE_TOKEN=...        # Vercel → Storage → your Blob store → .env.local tab
-   SUPABASE_URL=https://YOUR-PROJECT-ref.supabase.co
-   SUPABASE_SERVICE_ROLE_KEY=...    # Supabase → Project Settings → API keys → secret / service_role
-   OWNER_EMAIL=you@example.com
-   ```
-
-   (`.env.migrate` is gitignored — never commit the service-role key.)
-
-3. Run:
-
-   ```
-   node --env-file=.env.migrate scripts/migrate-blob-to-supabase.mjs
-   ```
-
-   It copies every Blob file into your account, keeps folder names, file names and upload dates,
-   and lists anything it couldn't copy (e.g. files over 50 MB). It's safe to run again.
-
-4. Check your files in the app. Then you can disconnect/delete the Blob store in Vercel, remove
-   `BLOB_READ_WRITE_TOKEN`, and drop the old table in Supabase with
-   `drop table if exists public.files;`.
+(You can also run `scripts/migrate-blob-to-supabase.mjs` locally — see the comment at its top.)
 
 ## Local development
 
@@ -103,9 +76,11 @@ npm run dev
 
 - **Sign-in:** Supabase Auth with cookie sessions (`@supabase/ssr`). `middleware.js` refreshes
   the session and sends signed-out visitors to `/login`.
-- **Uploads:** the browser uploads straight to Supabase Storage under `<user id>/<random id>.<ext>`
-  (no Vercel 4.5 MB body limit), then `POST /api/files` records the folder and name.
+- **Uploads:** `POST /api/upload-url` gives the browser a one-time signed upload URL for
+  `<user id>/<random id>.<ext>`; the bytes go straight to Supabase (no Vercel 4.5 MB body limit),
+  then `POST /api/files` records the folder and name.
 - **Viewing/downloading:** each file has a stable link `/api/f/<id>` that checks it's yours and
   redirects to a 1-hour signed URL. The bucket itself is private.
-- **Isolation:** row-level security on `user_files` and on storage objects — even with the public
-  anon key, a user can only reach their own rows and objects.
+- **Isolation:** row-level security on `user_files` means a user can only see or delete their own
+  rows; the bucket is private with no storage policies, so the only way in is a signed URL the
+  server hands out after that check.

@@ -1,5 +1,6 @@
 -- Koldrop: per-user files on Supabase Storage.
--- Run this once in Supabase → SQL Editor. It is safe to run again.
+-- Runs automatically on every Vercel build (scripts/setup-db.mjs). Safe to run again.
+-- You can also paste it into Supabase → SQL Editor by hand.
 
 -- 1) The file list: one row per file, owned by a user.
 create table if not exists public.user_files (
@@ -34,25 +35,10 @@ create policy "Users update own files" on public.user_files
 create policy "Users delete own files" on public.user_files
   for delete to authenticated using ((select auth.uid()) = user_id);
 
--- 2) The private storage bucket. 50 MB is the per-file maximum on Supabase's free plan.
-insert into storage.buckets (id, name, public, file_size_limit)
-values ('files', 'files', false, 52428800)
-on conflict (id) do update set public = false, file_size_limit = excluded.file_size_limit;
-
--- 3) Storage rules: each user can only touch objects under their own "<user id>/" prefix.
-drop policy if exists "Users read own objects"   on storage.objects;
-drop policy if exists "Users upload own objects" on storage.objects;
-drop policy if exists "Users delete own objects" on storage.objects;
-
-create policy "Users read own objects" on storage.objects
-  for select to authenticated
-  using (bucket_id = 'files' and (storage.foldername(name))[1] = (select auth.uid())::text);
-create policy "Users upload own objects" on storage.objects
-  for insert to authenticated
-  with check (bucket_id = 'files' and (storage.foldername(name))[1] = (select auth.uid())::text);
-create policy "Users delete own objects" on storage.objects
-  for delete to authenticated
-  using (bucket_id = 'files' and (storage.foldername(name))[1] = (select auth.uid())::text);
+-- 2) The private "files" bucket is created by scripts/setup-db.mjs through the Storage API.
+--    It has NO storage policies on purpose: browsers never talk to storage with their own
+--    rights. The server checks ownership via user_files (above) and then hands out one-time
+--    signed upload/download URLs.
 
 -- The old single-user index table ("files") is no longer used. After you've run the
 -- migration script and checked your files, you can drop it:

@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { createClient, getUser } from '../../../lib/supabase/server';
+import { getAdmin } from '../../../lib/supabase/admin';
 import { BUCKET, FILES_TABLE } from '../../../lib/supabase/config';
 
 export const dynamic = 'force-dynamic';
@@ -87,7 +88,7 @@ export async function POST(request) {
   } catch (error) {
     // Don't leave an orphaned object in storage if the row could not be written.
     if (key && key.startsWith(`${user.id}/`)) {
-      await supabase.storage.from(BUCKET).remove([key]).catch(() => {});
+      await getAdmin().storage.from(BUCKET).remove([key]).catch(() => {});
     }
     const duplicate = error?.code === '23505';
     return NextResponse.json(
@@ -119,7 +120,7 @@ export async function DELETE(request) {
 
     const keys = (rows || []).map((r) => r.storage_key);
     for (let i = 0; i < keys.length; i += 1000) {
-      const { error: rmError } = await supabase.storage.from(BUCKET).remove(keys.slice(i, i + 1000));
+      const { error: rmError } = await getAdmin().storage.from(BUCKET).remove(keys.slice(i, i + 1000));
       if (rmError) console.error('Storage remove failed:', rmError.message);
     }
 
