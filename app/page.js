@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef } from 'react';
 import { uploadFile, backfillThumbnail } from '../lib/upload';
+import { nextWipe } from '../lib/cleanup-schedule';
 import JSZip from 'jszip';
 import { saveAs } from 'file-saver';
 
@@ -871,7 +872,7 @@ export default function Home() {
   };
 
   return (
-    <div>
+    <div style={{ paddingBottom: '56px' }}>
       <style>{`@keyframes dropSpin { to { transform: rotate(360deg); } }`}</style>
 
       {/* Refresh loading indicator */}
@@ -1422,13 +1423,15 @@ export default function Home() {
       {/* Toast */}
       {toast && (
         <div style={{
-          position: 'fixed', bottom: '24px', left: '50%', transform: 'translateX(-50%)',
+          position: 'fixed', bottom: '64px', left: '50%', transform: 'translateX(-50%)',
           background: '#4caf50', color: 'white', padding: '12px 24px', borderRadius: '8px',
           fontSize: '14px', fontWeight: 600, zIndex: 400, boxShadow: '0 4px 12px rgba(0,0,0,0.5)'
         }}>
           {toast}
         </div>
       )}
+
+      <WipeNotice />
     </div>
   );
 }
@@ -1469,3 +1472,38 @@ const btnDanger = {
   background: '#e84057', color: 'white', border: 'none',
   padding: '6px 12px', borderRadius: '8px', fontSize: '12px', fontWeight: 600, cursor: 'pointer'
 };
+
+// Fixed bar at the bottom of the screen: every file is deleted weekly, show when.
+function WipeNotice() {
+  const [when, setWhen] = useState(null);
+  useEffect(() => {
+    const update = () => setWhen(nextWipe());
+    update();
+    const t = setInterval(update, 60 * 1000);
+    return () => clearInterval(t);
+  }, []);
+  if (!when) return null;
+
+  const ms = when.getTime() - Date.now();
+  const hours = Math.max(0, Math.round(ms / 3600000));
+  const inText = hours < 1 ? 'within the hour' : hours < 48 ? `in ${hours} h` : `in ${Math.round(hours / 24)} days`;
+  const dateText = when.toLocaleString(undefined, {
+    weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit',
+  });
+  const soon = hours < 24;
+
+  return (
+    <div
+      role="note"
+      style={{
+        position: 'fixed', left: 0, right: 0, bottom: 0, zIndex: 150,
+        background: soon ? 'rgba(232,64,87,0.95)' : 'rgba(30,30,30,0.96)',
+        borderTop: `1px solid ${soon ? '#ff6b6b' : '#3a3a3a'}`,
+        color: soon ? '#fff' : '#d0d0d0', fontSize: '13px', lineHeight: 1.4,
+        padding: '10px 16px', textAlign: 'center', backdropFilter: 'blur(6px)',
+      }}
+    >
+      ⚠️ All files are deleted every week. Next wipe: <strong>{dateText}</strong> ({inText}). Download anything you want to keep.
+    </div>
+  );
+}
