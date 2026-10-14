@@ -17,7 +17,7 @@ export async function POST(request) {
     const { filename, size } = await request.json();
     if (Number(size) > MAX_UPLOAD_BYTES) {
       return NextResponse.json(
-        { error: `File is too large (max ${Math.round(MAX_UPLOAD_BYTES / 1048576)} MB)` },
+        { error: `File is too large (max ${Math.round(MAX_UPLOAD_BYTES / 1e6)} MB)` },
         { status: 413 }
       );
     }

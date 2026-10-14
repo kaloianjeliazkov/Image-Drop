@@ -54,7 +54,7 @@ export async function migrateBlobToSupabase({
   ownerEmail,
   supabase,
   blobToken = process.env.BLOB_READ_WRITE_TOKEN,
-  maxBytes = Number(process.env.NEXT_PUBLIC_MAX_UPLOAD_MB || 50) * 1024 * 1024,
+  maxBytes = Number(process.env.NEXT_PUBLIC_MAX_UPLOAD_MB || 50) * 1000 * 1000,
   log = (msg) => console.log(`[migrate] ${msg}`),
 }) {
   const userId = await findUserId(supabase, ownerEmail);
@@ -83,7 +83,7 @@ export async function migrateBlobToSupabase({
       continue;
     }
     if (blob.size > maxBytes) {
-      failed.push(`${label} (${Math.round(blob.size / 1048576)} MB — over the ${Math.round(maxBytes / 1048576)} MB limit)`);
+      failed.push(`${label} (${Math.round(blob.size / 1e6)} MB — over the ${Math.round(maxBytes / 1e6)} MB limit)`);
       continue;
     }
 
