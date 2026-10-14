@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { createClient } from '../../lib/supabase/browser';
+import { isValidEmail } from '../../lib/email';
 
 // mode: 'signin' | 'signup' | 'forgot'
 export default function LoginPage() {
@@ -39,6 +40,10 @@ export default function LoginPage() {
       setError(mode === 'forgot' ? 'Enter your email.' : 'Enter your email and password.');
       return;
     }
+    if (mode === 'signup' && !isValidEmail(email)) {
+      setError('Enter a valid email address, like name@example.com.');
+      return;
+    }
     if (mode === 'signup' && password.length < 8) {
       setError('Use at least 8 characters for your password.');
       return;
@@ -56,7 +61,7 @@ export default function LoginPage() {
 
       if (mode === 'signup') {
         const { data, error: err } = await supabase.auth.signUp({
-          email,
+          email: email.trim(),
           password,
           options: { emailRedirectTo: callbackUrl('/') },
         });

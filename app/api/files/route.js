@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { createClient, getUser } from '../../../lib/supabase/server';
 import { getAdmin } from '../../../lib/supabase/admin';
 import { BUCKET, FILES_TABLE } from '../../../lib/supabase/config';
+import { quotaFor, quotaMessage } from '../../../lib/quota';
 
 export const dynamic = 'force-dynamic';
 
@@ -44,9 +45,13 @@ export async function GET() {
       .order('uploaded_at', { ascending: false });
     if (error) throw error;
 
+    const files = (data || []).map(rowToFile);
+    const used = files.reduce((sum, f) => sum + (Number(f.size) || 0), 0);
+    const { limit } = await quotaFor(supabase, user).catch(() => ({ limit: null }));
     return NextResponse.json({
-      files: (data || []).map(rowToFile),
+      files,
       user: { email: user.email },
+      quota: { used, limit },
     });
   } catch (error) {
     return NextResponse.json({ error: error.message }, { status: 500 });
@@ -75,6 +80,15 @@ export async function POST(request) {
     const name = (slash > 0 ? pathname.slice(slash + 1) : pathname).slice(0, 200);
     if (!name) return NextResponse.json({ error: 'pathname is required' }, { status: 400 });
 
+    // Use the real stored size (not what the browser claimed) and enforce the per-user limit
+    const { data: info } = await getAdmin().storage.from(BUCKET).info(key).catch(() => ({ data: null }));
+    const size = Number(info?.size) || Number(body.size) || 0;
+    const { used, limit } = await quotaFor(supabase, user);
+    if (limit !== null && used + size > limit) {
+      await getAdmin().storage.from(BUCKET).remove([key, thumbKey].filter(Boolean)).catch(() => {});
+      return NextResponse.json({ error: quotaMessage(used, limit) }, { status: 413 });
+    }
+
     const { data, error } = await supabase
       .from(FILES_TABLE)
       .insert({
@@ -83,7 +97,7 @@ export async function POST(request) {
         thumb_key: thumbKey,
         folder,
         name,
-        size: Number(body.size) || 0,
+        size,
         content_type: body.contentType || null,
         is_video: isVideoName(name),
       })

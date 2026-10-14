@@ -31,6 +31,7 @@ const isStrayEditFolder = (name) => /(?:\s+edited){2,}$/i.test(String(name || ''
 export default function Home() {
   const [files, setFiles] = useState([]);
   const [userEmail, setUserEmail] = useState('');
+  const [quota, setQuota] = useState(null); // { used, limit } — limit null = unlimited
   const [folders, setFolders] = useState([]);
   const [currentFolder, setCurrentFolder] = useState('');
   const [folderInput, setFolderInput] = useState('');
@@ -132,6 +133,7 @@ export default function Home() {
       const loaded = data.files || [];
       setFiles(loaded);
       if (data.user?.email) setUserEmail(data.user.email);
+      if (data.quota) setQuota(data.quota);
 
       // Extract unique folders from uploaded files
       const folderMap = {};
@@ -1186,6 +1188,25 @@ export default function Home() {
               </button>
 
               <hr style={{ border: 'none', borderTop: '1px solid #333', margin: '20px 0' }} />
+
+              {quota && (
+                <div style={{ marginBottom: '16px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px', marginBottom: '6px' }}>
+                    <strong>Your storage</strong>
+                    <span style={{ color: '#aaa' }}>
+                      {(quota.used / 1e6).toFixed(1)} MB{quota.limit ? ` of ${Math.round(quota.limit / 1e6)} MB` : ' · no limit'}
+                    </span>
+                  </div>
+                  {quota.limit && (
+                    <div style={{ height: '6px', background: '#2a2a2a', borderRadius: '3px', overflow: 'hidden' }}>
+                      <div style={{
+                        height: '100%', width: `${Math.min(100, (quota.used / quota.limit) * 100)}%`,
+                        background: quota.used / quota.limit > 0.9 ? '#e84057' : '#6c63ff',
+                      }} />
+                    </div>
+                  )}
+                </div>
+              )}
 
               <p style={{ fontSize: '13px', color: '#777', margin: 0 }}>
                 💡 <em>Tip for Mobile:</em> On iOS and Android, downloads automatically save to your device's Files app or default Downloads folder.
