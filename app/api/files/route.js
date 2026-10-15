@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { createClient, getUser } from '../../../lib/supabase/server';
 import { getAdmin } from '../../../lib/supabase/admin';
 import { BUCKET, FILES_TABLE } from '../../../lib/supabase/config';
-import { quotaFor, quotaMessage } from '../../../lib/quota';
+import { quotaFor, quotaMessage, isUnlimited, enforceSingleLogin } from '../../../lib/quota';
 
 export const dynamic = 'force-dynamic';
 
@@ -45,12 +45,14 @@ export async function GET() {
       .order('uploaded_at', { ascending: false });
     if (error) throw error;
 
+    await enforceSingleLogin(supabase, user).catch(() => {});
+
     const files = (data || []).map(rowToFile);
     const used = files.reduce((sum, f) => sum + (Number(f.size) || 0), 0);
     const { limit } = await quotaFor(supabase, user).catch(() => ({ limit: null }));
     return NextResponse.json({
       files,
-      user: { email: user.email },
+      user: { email: user.email, owner: isUnlimited(user) },
       quota: { used, limit },
     });
   } catch (error) {

@@ -32,7 +32,11 @@ export async function middleware(request) {
 
   if (PUBLIC_PATHS.includes(pathname)) {
     if (pathname === '/login' && signedIn) {
-      return NextResponse.redirect(new URL('/', request.url));
+      // Keep an error from a failed account link so the app can show it
+      const url = new URL('/', request.url);
+      const err = request.nextUrl.searchParams.get('error');
+      if (err) url.searchParams.set('auth_error', err);
+      return NextResponse.redirect(url);
     }
     return response;
   }

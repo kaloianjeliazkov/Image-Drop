@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { uploadFile, backfillThumbnail } from '../lib/upload';
 import { nextWipe } from '../lib/cleanup-schedule';
+import { createClient as createSupabase } from '../lib/supabase/browser';
 import JSZip from 'jszip';
 import { saveAs } from 'file-saver';
 
@@ -32,6 +33,8 @@ export default function Home() {
   const [files, setFiles] = useState([]);
   const [userEmail, setUserEmail] = useState('');
   const [quota, setQuota] = useState(null); // { used, limit } — limit null = unlimited
+  const [identities, setIdentities] = useState([]); // sign-in methods linked to this account
+  const [isOwner, setIsOwner] = useState(false); // only the owner can add a second login
   const [folders, setFolders] = useState([]);
   const [currentFolder, setCurrentFolder] = useState('');
   const [folderInput, setFolderInput] = useState('');
@@ -133,6 +136,7 @@ export default function Home() {
       const loaded = data.files || [];
       setFiles(loaded);
       if (data.user?.email) setUserEmail(data.user.email);
+      setIsOwner(Boolean(data.user?.owner));
       if (data.quota) setQuota(data.quota);
 
       // Extract unique folders from uploaded files
@@ -556,6 +560,45 @@ export default function Home() {
   };
 
   // Sign out: end the Supabase session, forget this account's folders, back to the login screen
+  // Sign-in methods on this account (e.g. two Google accounts), shown in Settings
+  const loadIdentities = async () => {
+    try {
+      const { data } = await createSupabase().auth.getUserIdentities();
+      setIdentities(data?.identities || []);
+    } catch {
+      setIdentities([]);
+    }
+  };
+
+  useEffect(() => {
+    loadIdentities();
+    // Result of "Link another Google account" coming back from Google
+    const params = new URLSearchParams(window.location.search);
+    const linked = params.get('linked');
+    const authError = params.get('auth_error');
+    if (linked || authError) {
+      if (linked) showToast('✓ Google account linked — you can now sign in with it');
+      if (authError) {
+        showToast(/already|exists|linked/i.test(authError)
+          ? '❌ That Google account already has its own Koldrop account'
+          : `❌ ${authError}`);
+      }
+      window.history.replaceState(null, '', window.location.pathname);
+    }
+  }, []);
+
+  // Adds another Google login to THIS account; afterwards both open the same files
+  const handleLinkGoogle = async () => {
+    const { error } = await createSupabase().auth.linkIdentity({
+      provider: 'google',
+      options: {
+        redirectTo: `${window.location.origin}/auth/callback?next=${encodeURIComponent('/?linked=1')}`,
+        queryParams: { prompt: 'select_account' },
+      },
+    });
+    if (error) showToast(`❌ ${error.message}`);
+  };
+
   const handleLogout = async () => {
     try {
       await fetch('/api/logout', { method: 'POST' });
@@ -1188,6 +1231,20 @@ export default function Home() {
               </button>
 
               <hr style={{ border: 'none', borderTop: '1px solid #333', margin: '20px 0' }} />
+
+              {isOwner && (
+              <div style={{ marginBottom: '16px' }}>
+                <strong style={{ fontSize: '13px' }}>Ways to sign in</strong>
+                <div style={{ fontSize: '12px', color: '#888', margin: '6px 0 10px' }}>
+                  {identities.length
+                    ? identities.map((i) => `${i.provider === 'google' ? 'Google' : 'Email'}: ${i.identity_data?.email || '—'}`).join(' · ')
+                    : '—'}
+                </div>
+                <button onClick={handleLinkGoogle} style={{ ...btnGhost, width: '100%', padding: '9px' }}>
+                  + Link another Google account
+                </button>
+              </div>
+              )}
 
               {quota && (
                 <div style={{ marginBottom: '16px' }}>
