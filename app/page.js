@@ -4,7 +4,6 @@ import { useState, useEffect, useRef } from 'react';
 import { uploadFile, backfillThumbnail } from '../lib/upload';
 import { nextWipe } from '../lib/cleanup-schedule';
 import JSZip from 'jszip';
-import { saveAs } from 'file-saver';
 
 // Permanent folders: always visible as tabs and upload targets, even when empty.
 // These four can never be deleted, with android/ios pinned to the left.
@@ -72,6 +71,9 @@ export default function Home() {
   const [autoSaveDirect, setAutoSaveDirect] = useState(false);
   // Mirrors customDirHandle so a folder picked mid-call is usable right away (state lags a render)
   const customDirHandleRef = useRef(null);
+  // True only when the folder was picked in Settings (not by a multi-file save), so single
+  // downloads don't silently land in a folder picked for an earlier batch
+  const settingsDirChosenRef = useRef(false);
   // Files are always removed from cloud storage once downloaded (keeps everyone inside the free storage)
   const deleteAfterDownload = true;
   const [knownFolders, setKnownFolders] = useState([]);
@@ -196,6 +198,22 @@ export default function Home() {
     loadFiles();
   }, [currentFolder]);
 
+  // Keep a long-open tab in sync: reload the list when you come back to the tab, and every
+  // 2 minutes while it's visible (files downloaded/deleted on another device disappear)
+  const loadFilesRef = useRef(loadFiles);
+  loadFilesRef.current = loadFiles; // always call the latest version (current folder etc.)
+  useEffect(() => {
+    const onVisible = () => { if (document.visibilityState === 'visible') loadFilesRef.current(true); };
+    document.addEventListener('visibilitychange', onVisible);
+    window.addEventListener('focus', onVisible);
+    const t = setInterval(onVisible, 2 * 60 * 1000);
+    return () => {
+      document.removeEventListener('visibilitychange', onVisible);
+      window.removeEventListener('focus', onVisible);
+      clearInterval(t);
+    };
+  }, []);
+
   // Clear selections when switching folder
   useEffect(() => {
     setSelectedUrls(new Set());
@@ -287,27 +305,66 @@ export default function Home() {
     return false;
   };
 
-  // Download a single file
-  const downloadSingleFile = async (file) => {
-    try {
-      showToast(`Downloading ${file.name}...`);
-      const response = await fetch(file.url);
-      const blob = await response.blob();
-      
-      const savedDirect = await saveFileToDirectory(file.name, blob);
-      if (savedDirect) {
-        showToast(`Saved to ${customDirName}!`);
-      } else {
-        saveAs(blob, file.name);
-      }
-
-      // Auto delete if option enabled
-      if (deleteAfterDownload) {
-        await deleteFilesSilently([file.url]);
-      }
-    } catch (err) {
-      showToast(`Download failed: ${err.message}`);
+  // Fetch a file's bytes and make sure we really got the whole file. Throws a readable error
+  // otherwise — callers must never delete a file whose download didn't succeed.
+  const fetchFileBlob = async (file) => {
+    // ?download=1 is a different URL from the one the viewer/grid loaded, so a stale cached
+    // response can't be reused; no-store makes the browser ask the server every time.
+    const res = await fetch(`${file.url}?download=1`, { cache: 'no-store' });
+    if (res.status === 404) {
+      const err = new Error('This file is no longer available — it was probably already downloaded or deleted on another device.');
+      err.gone = true;
+      throw err;
     }
+    if (res.status === 401) throw new Error('Your session expired. Reload the page and try again.');
+    if (!res.ok) throw new Error(`Server error (${res.status})`);
+    const blob = await res.blob();
+    if (!blob.size || (file.size && blob.size !== Number(file.size))) {
+      throw new Error('The download was incomplete. Nothing was deleted — try again.');
+    }
+    return blob;
+  };
+
+  // Save a Blob through the browser's normal download (goes to the Downloads folder)
+  const browserSave = (blob, filename) => {
+    const href = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = href;
+    a.download = filename;
+    a.rel = 'noopener';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(href), 120000);
+  };
+
+  // Download a single file. Goes to the browser's Downloads folder, or to the folder chosen in
+  // Settings. It's removed from Koldrop only after the whole file was received.
+  const downloadSingleFile = async (file) => {
+    showToast(`Downloading ${file.name}...`);
+    let blob;
+    try {
+      blob = await fetchFileBlob(file);
+    } catch (err) {
+      showToast(`❌ ${err.message}`);
+      if (err.gone) refreshAfterChange(); // drop it from the stale list
+      return;
+    }
+
+    let where = 'Downloads';
+    try {
+      const savedDirect = settingsDirChosenRef.current && (await saveFileToDirectory(file.name, blob));
+      if (savedDirect) where = customDirName;
+      else browserSave(blob, file.name);
+    } catch (err) {
+      showToast(`❌ Could not save the file: ${err.message}`);
+      return;
+    }
+
+    if (deleteAfterDownload) {
+      await deleteFilesSilently([file.url], { quiet: true });
+    }
+    showToast(`✓ Saved ${file.name} to ${where}`);
   };
 
   // Download files (either selected or entire folder) as a ZIP archive
@@ -320,17 +377,22 @@ export default function Home() {
       const zip = new JSZip();
       let completed = 0;
 
+      const included = [];
+      const failed = [];
       for (const item of filesToDownload) {
         try {
-          const resp = await fetch(item.url);
-          const blob = await resp.blob();
+          const blob = await fetchFileBlob(item);
           zip.file(item.name, blob);
+          included.push(item);
         } catch (e) {
           console.error(`Failed to fetch ${item.name}`, e);
+          failed.push(item.name);
         }
         completed++;
         setZipProgress(`Downloading ${completed}/${filesToDownload.length}...`);
       }
+
+      if (!included.length) throw new Error('None of the files could be downloaded. Nothing was deleted.');
 
       setZipProgress('Generating ZIP package...');
       const zipContent = await zip.generateAsync({ type: 'blob' }, (metadata) => {
@@ -339,18 +401,15 @@ export default function Home() {
 
       const finalName = `${zipName}.zip`;
       const savedDirect = await saveFileToDirectory(finalName, zipContent);
-      if (savedDirect) {
-        showToast(`✓ ZIP saved to ${customDirName}!`);
-      } else {
-        saveAs(zipContent, finalName);
-        showToast(`✓ Downloaded ${finalName}`);
-      }
+      if (!savedDirect) browserSave(zipContent, finalName);
 
-      // Auto delete if option enabled
+      // Only the files that are actually inside the ZIP are removed
       if (deleteAfterDownload) {
-        const urlsToDelete = filesToDownload.map(f => f.url);
-        await deleteFilesSilently(urlsToDelete);
+        await deleteFilesSilently(included.map(f => f.url), { quiet: true });
       }
+      showToast(failed.length
+        ? `⚠️ ${finalName} saved without ${failed.length} file(s) that couldn't be downloaded (they were kept)`
+        : `✓ ${savedDirect ? `ZIP saved to ${customDirName}` : `Downloaded ${finalName}`}`);
     } catch (err) {
       console.error(err);
       showToast(`❌ Error creating ZIP: ${err.message}`);
@@ -394,11 +453,10 @@ export default function Home() {
       const file = filesToDownload[i];
       setZipProgress(`Saving ${i + 1}/${filesToDownload.length}: ${file.name}...`);
       try {
-        const resp = await fetch(file.url);
-        const blob = await resp.blob();
+        const blob = await fetchFileBlob(file);
         const savedDirect = await saveFileToDirectory(file.name, blob);
         if (!savedDirect) {
-          saveAs(blob, file.name);
+          browserSave(blob, file.name);
         }
         savedCount++;
         downloadedUrls.push(file.url);
@@ -413,14 +471,16 @@ export default function Home() {
 
     setIsZipping(false);
     setZipProgress('');
-    showToast(customDirHandleRef.current
-      ? `✓ Saved ${savedCount} file(s) to ${folderLabel}!`
-      : `✓ Downloaded ${savedCount} file(s) individually!`);
-
-    // Auto delete if option enabled
+    // Only files that were really saved are removed
     if (deleteAfterDownload && downloadedUrls.length > 0) {
-      await deleteFilesSilently(downloadedUrls);
+      await deleteFilesSilently(downloadedUrls, { quiet: true });
     }
+    const failedCount = filesToDownload.length - savedCount;
+    showToast(failedCount
+      ? `⚠️ Saved ${savedCount} file(s); ${failedCount} couldn't be downloaded and were kept`
+      : customDirHandleRef.current
+        ? `✓ Saved ${savedCount} file(s) to ${folderLabel}!`
+        : `✓ Downloaded ${savedCount} file(s) individually!`);
   };
 
   // Delete selected files
@@ -522,7 +582,7 @@ export default function Home() {
   };
 
   // Silently delete files from storage (for auto-delete on download)
-  const deleteFilesSilently = async (urls) => {
+  const deleteFilesSilently = async (urls, { quiet = false } = {}) => {
     try {
       await fetch('/api/files', {
         method: 'DELETE',
@@ -531,7 +591,7 @@ export default function Home() {
       });
       setSelectedUrls(new Set());
       refreshAfterChange();
-      showToast('🧹 Cleaned up downloaded files');
+      if (!quiet) showToast('🧹 Cleaned up downloaded files');
     } catch (e) {
       console.warn('Failed auto-delete cleanup:', e);
     }
@@ -546,6 +606,7 @@ export default function Home() {
     try {
       const dirHandle = await window.showDirectoryPicker({ mode: 'readwrite' });
       customDirHandleRef.current = dirHandle;
+      settingsDirChosenRef.current = true;
       setCustomDirHandle(dirHandle);
       setCustomDirName(dirHandle.name);
       setAutoSaveDirect(true);
