@@ -49,6 +49,16 @@ create or replace function public.total_storage_bytes() returns bigint
 revoke execute on function public.total_storage_bytes() from public, anon, authenticated;
 grant execute on function public.total_storage_bytes() to service_role;
 
+-- Live updates: each account may only join / send on its own private channel "koldrop:<user id>"
+drop policy if exists "Koldrop own live channel read" on realtime.messages;
+drop policy if exists "Koldrop own live channel send" on realtime.messages;
+create policy "Koldrop own live channel read" on realtime.messages
+  for select to authenticated
+  using ((select realtime.topic()) = 'koldrop:' || (select auth.uid())::text);
+create policy "Koldrop own live channel send" on realtime.messages
+  for insert to authenticated
+  with check ((select realtime.topic()) = 'koldrop:' || (select auth.uid())::text);
+
 -- 2) The private "files" bucket is created by scripts/setup-db.mjs through the Storage API.
 --    It has NO storage policies on purpose: browsers never talk to storage with their own
 --    rights. The server checks ownership via user_files (above) and then hands out one-time
