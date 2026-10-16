@@ -3,7 +3,7 @@ import { NextResponse } from 'next/server';
 import { createClient, getUser } from '../../../lib/supabase/server';
 import { MAX_UPLOAD_BYTES } from '../../../lib/supabase/config';
 import { newKey, signUpload } from '../../../lib/storage';
-import { quotaFor, quotaMessage } from '../../../lib/quota';
+import { quotaFor, quotaMessage, capMessage } from '../../../lib/quota';
 
 export const dynamic = 'force-dynamic';
 
@@ -35,6 +35,8 @@ export async function POST(request) {
     if (limit !== null && used + Number(size || 0) > limit) {
       return NextResponse.json({ error: quotaMessage(used, limit) }, { status: 413 });
     }
+    const full = await capMessage(size);
+    if (full) return NextResponse.json({ error: full }, { status: 507 });
 
     const name = String(filename || '');
     const dot = name.lastIndexOf('.');

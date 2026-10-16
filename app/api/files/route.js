@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { createClient, getUser } from '../../../lib/supabase/server';
 import { FILES_TABLE } from '../../../lib/supabase/config';
 import { objectPath, objectSize, removeObjects } from '../../../lib/storage';
-import { quotaFor, quotaMessage } from '../../../lib/quota';
+import { quotaFor, quotaMessage, capMessage } from '../../../lib/quota';
 
 export const dynamic = 'force-dynamic';
 
@@ -91,6 +91,12 @@ export async function POST(request) {
     if (limit !== null && used + size > limit) {
       await removeObjects([key, thumbKey]).catch(() => {});
       return NextResponse.json({ error: quotaMessage(used, limit) }, { status: 413 });
+    }
+    // Hard cap on everyone's storage together, checked with the real size
+    const full = await capMessage(size);
+    if (full) {
+      await removeObjects([key, thumbKey]).catch(() => {});
+      return NextResponse.json({ error: full }, { status: 507 });
     }
 
     const { data, error } = await supabase
