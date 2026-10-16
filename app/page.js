@@ -169,29 +169,62 @@ export default function Home() {
   };
 
   // Reload after uploading or deleting, bypassing the server's (now stale) list cache
-  const refreshAfterChange = () => {
+  // Reload after uploading or deleting. Called once per action (a whole batch of uploads is one
+  // call), and tells your other open tabs/devices to reload once too.
+  const refreshAfterChange = ({ notify = true } = {}) => {
     lastChangeRef.current = Date.now();
     loadFiles(true);
+    if (notify) notifyOtherTabs();
   };
 
   useEffect(() => {
     loadFiles();
   }, [currentFolder]);
 
-  // Keep a long-open tab in sync: reload the list when you come back to the tab, and every
-  // 2 minutes while it's visible (files downloaded/deleted on another device disappear)
   const loadFilesRef = useRef(loadFiles);
   loadFilesRef.current = loadFiles; // always call the latest version (current folder etc.)
+
+  // Live updates: one private channel per account. When you upload/delete on one device, that
+  // device sends a single "changed" signal (one per batch, not per file) and every other open
+  // tab of yours reloads its list once. No polling.
+  const liveChannelRef = useRef(null);
+  const notifyOtherTabs = () => {
+    const ch = liveChannelRef.current;
+    if (ch) ch.send({ type: 'broadcast', event: 'changed', payload: {} }).catch(() => {});
+  };
+  useEffect(() => {
+    let cancelled = false;
+    let channel = null;
+    let pending = null;
+    (async () => {
+      const supabase = createSupabase();
+      const { data } = await supabase.auth.getUser();
+      const uid = data?.user?.id;
+      if (!uid || cancelled) return;
+      await supabase.realtime.setAuth(); // private channel: only this account may join
+      channel = supabase
+        .channel(`koldrop:${uid}`, { config: { private: true, broadcast: { self: false } } })
+        .on('broadcast', { event: 'changed' }, () => {
+          // Collapse bursts into one reload
+          clearTimeout(pending);
+          pending = setTimeout(() => loadFilesRef.current(true), 400);
+        })
+        .subscribe();
+      liveChannelRef.current = channel;
+    })();
+    return () => {
+      cancelled = true;
+      clearTimeout(pending);
+      liveChannelRef.current = null;
+      if (channel) createSupabase().removeChannel(channel);
+    };
+  }, []);
+
+  // Coming back to the tab (e.g. after the laptop slept and may have missed a signal): reload once
   useEffect(() => {
     const onVisible = () => { if (document.visibilityState === 'visible') loadFilesRef.current(true); };
     document.addEventListener('visibilitychange', onVisible);
-    window.addEventListener('focus', onVisible);
-    const t = setInterval(onVisible, 2 * 60 * 1000);
-    return () => {
-      document.removeEventListener('visibilitychange', onVisible);
-      window.removeEventListener('focus', onVisible);
-      clearInterval(t);
-    };
+    return () => document.removeEventListener('visibilitychange', onVisible);
   }, []);
 
   // Clear selections when switching folder
@@ -375,7 +408,7 @@ export default function Home() {
       blob = await fetchFileBlob(file);
     } catch (err) {
       showToast(`❌ ${err.message}`);
-      if (err.gone) refreshAfterChange(); // drop it from the stale list
+      if (err.gone) refreshAfterChange({ notify: false }); // drop it from this tab's stale list
       return;
     }
 
