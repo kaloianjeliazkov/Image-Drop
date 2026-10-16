@@ -1719,11 +1719,19 @@ export default function Home() {
             ✕
           </button>
 
-          {/* Photo (framed exactly like the lightbox) */}
-          <div style={{
-            flex: 1, minHeight: 0, display: 'flex', alignItems: 'center',
-            justifyContent: 'center', padding: '20px'
-          }}>
+          {/* Photo (framed exactly like the lightbox). Clicking the empty space around it closes
+              the editor and goes back to where you were; asks first if there are unsaved edits. */}
+          <div
+            onClick={(e) => {
+              if (e.target !== e.currentTarget) return;
+              if (annotations.length && !confirm('Discard your edits?')) return;
+              setEditingFile(null);
+            }}
+            style={{
+              flex: 1, minHeight: 0, display: 'flex', alignItems: 'center',
+              justifyContent: 'center', padding: '20px'
+            }}
+          >
             <div style={{ position: 'relative', display: 'inline-block' }}>
               <canvas
                 ref={canvasRef}
@@ -1778,7 +1786,7 @@ export default function Home() {
           }}>
             <div style={{ fontSize: '11px', color: '#777', marginBottom: '8px', textAlign: 'center' }}>
               {{ arrow: 'Drag to draw an arrow', box: 'Drag to draw a box', text: 'Click to place text', crop: 'Drag to choose the area to keep' }[editTool]}
-              {' • '}click something to select, drag to move, corners to resize • Delete removes • Ctrl+Z / Ctrl+Y
+              {' • '}click something to select, drag to move, corners to resize • Ctrl+Z / Ctrl+Y
             </div>
             <div style={{ display: 'flex', gap: '8px', alignItems: 'center', justifyContent: 'center', flexWrap: 'wrap' }}>
               <button
