@@ -38,6 +38,17 @@ create policy "Users update own files" on public.user_files
 create policy "Users delete own files" on public.user_files
   for delete to authenticated using ((select auth.uid()) = user_id);
 
+-- Storage totals, summed in the database (a plain select would stop at 1000 rows).
+create or replace function public.my_storage_bytes() returns bigint
+  language sql stable security invoker set search_path = ''
+  as $$ select coalesce(sum(size), 0)::bigint from public.user_files where user_id = (select auth.uid()) $$;
+
+create or replace function public.total_storage_bytes() returns bigint
+  language sql stable security definer set search_path = ''
+  as $$ select coalesce(sum(size), 0)::bigint from public.user_files $$;
+revoke execute on function public.total_storage_bytes() from public, anon, authenticated;
+grant execute on function public.total_storage_bytes() to service_role;
+
 -- 2) The private "files" bucket is created by scripts/setup-db.mjs through the Storage API.
 --    It has NO storage policies on purpose: browsers never talk to storage with their own
 --    rights. The server checks ownership via user_files (above) and then hands out one-time
