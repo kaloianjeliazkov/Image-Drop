@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { createClient, getUser } from '../../../lib/supabase/server';
-import { getAdmin } from '../../../lib/supabase/admin';
-import { BUCKET, FILES_TABLE } from '../../../lib/supabase/config';
+import { FILES_TABLE } from '../../../lib/supabase/config';
+import { objectPath, objectSize, removeObjects } from '../../../lib/storage';
 import { quotaFor, quotaMessage } from '../../../lib/quota';
 
 export const dynamic = 'force-dynamic';
@@ -30,7 +30,8 @@ const rowToFile = (row) => ({
   thumbUrl: row.thumb_key ? `${fileUrl(row.id)}?thumb=1` : null,
 });
 
-const ownsKey = (user, key) => typeof key === 'string' && key.startsWith(`${user.id}/`) && !key.includes('..');
+const ownsKey = (user, key) =>
+  typeof key === 'string' && objectPath(key).startsWith(`${user.id}/`) && !key.includes('..');
 
 // The signed-in user's files (row-level security filters to their own rows).
 export async function GET() {
@@ -72,7 +73,7 @@ export async function POST(request) {
     key = String(body.key || '');
     thumbKey = ownsKey(user, body.thumbKey) ? body.thumbKey : null;
     const pathname = String(body.pathname || '');
-    if (!key.startsWith(`${user.id}/`)) {
+    if (!ownsKey(user, key)) {
       return NextResponse.json({ error: 'Invalid storage key' }, { status: 400 });
     }
     const slash = pathname.indexOf('/');
@@ -81,11 +82,14 @@ export async function POST(request) {
     if (!name) return NextResponse.json({ error: 'pathname is required' }, { status: 400 });
 
     // Use the real stored size (not what the browser claimed) and enforce the per-user limit
-    const { data: info } = await getAdmin().storage.from(BUCKET).info(key).catch(() => ({ data: null }));
-    const size = Number(info?.size) || Number(body.size) || 0;
+    const stored = await objectSize(key);
+    if (stored === null && key.startsWith('r2:')) {
+      return NextResponse.json({ error: 'Upload not found — please try again' }, { status: 400 });
+    }
+    const size = stored ?? (Number(body.size) || 0);
     const { used, limit } = await quotaFor(supabase, user);
     if (limit !== null && used + size > limit) {
-      await getAdmin().storage.from(BUCKET).remove([key, thumbKey].filter(Boolean)).catch(() => {});
+      await removeObjects([key, thumbKey]).catch(() => {});
       return NextResponse.json({ error: quotaMessage(used, limit) }, { status: 413 });
     }
 
@@ -108,8 +112,8 @@ export async function POST(request) {
     return NextResponse.json({ success: true, file: rowToFile(data) });
   } catch (error) {
     // Don't leave an orphaned object in storage if the row could not be written.
-    if (key && key.startsWith(`${user.id}/`)) {
-      await getAdmin().storage.from(BUCKET).remove([key, thumbKey].filter(Boolean)).catch(() => {});
+    if (key && ownsKey(user, key)) {
+      await removeObjects([key, thumbKey]).catch(() => {});
     }
     const duplicate = error?.code === '23505';
     return NextResponse.json(
@@ -141,10 +145,7 @@ export async function DELETE(request) {
 
     // Remove the files and their thumbnails from storage
     const keys = (rows || []).flatMap((r) => [r.storage_key, r.thumb_key]).filter(Boolean);
-    for (let i = 0; i < keys.length; i += 1000) {
-      const { error: rmError } = await getAdmin().storage.from(BUCKET).remove(keys.slice(i, i + 1000));
-      if (rmError) console.error('Storage remove failed:', rmError.message);
-    }
+    await removeObjects(keys).catch((e) => console.error('Storage remove failed:', e.message));
 
     return NextResponse.json({ success: true, deleted: (rows || []).length });
   } catch (error) {
@@ -175,12 +176,12 @@ export async function PATCH(request) {
       .select('id');
     if (error) throw error;
     if (!data?.length) {
-      await getAdmin().storage.from(BUCKET).remove([thumbKey]).catch(() => {});
+      await removeObjects([thumbKey]).catch(() => {});
       return NextResponse.json({ success: true, skipped: true });
     }
     return NextResponse.json({ success: true });
   } catch (error) {
-    if (thumbKey) await getAdmin().storage.from(BUCKET).remove([thumbKey]).catch(() => {});
+    if (thumbKey) await removeObjects([thumbKey]).catch(() => {});
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 }
