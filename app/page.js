@@ -1,13 +1,19 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import { uploadFile, backfillThumbnail } from '../lib/upload';
 import { nextWipe } from '../lib/cleanup-schedule';
+import { createClient as createSupabase } from '../lib/supabase/browser';
+import { MAX_UPLOAD_BYTES } from '../lib/supabase/config';
 import JSZip from 'jszip';
 
-// Permanent folders: always visible as tabs and upload targets, even when empty.
-// These four can never be deleted, with android/ios pinned to the left.
-const PERMANENT_FOLDERS = ['android', 'ios', 'android edited', 'ios edited'];
+// Folders every new account starts with. They can be removed and others added in
+// Settings → Folders; the list is saved on the account, so it's the same on every device.
+const DEFAULT_FOLDERS = ['android', 'ios', 'android edited', 'ios edited'];
+
+// Folder names: no slashes or control characters, single spaces, max 50 characters
+const cleanFolderName = (name) =>
+  String(name || '').replace(/[\\/\u0000-\u001f]/g, '').replace(/\s+/g, ' ').trim().slice(0, 50);
 
 // Biggest canvas iOS Safari can export (4096 x 4096 worth of pixels); larger photos are scaled down to this when saving edits
 const MAX_EXPORT_PIXELS = 4096 * 4096;
@@ -20,8 +26,8 @@ const MAX_EDIT_DIM = 3000;
 // with the real resolution, so they look the same on screen and in the full-resolution export.
 const annK = (w, h) => Math.max(0.6, Math.min(6, Math.sqrt(w * h) / 1000));
 
-// Where an edit is saved: "android" -> "android edited", and an already-edited folder stays put
-// ("android edited" -> "android edited") instead of becoming "android edited edited".
+// Default destination for edits when none was chosen in Settings → Folders: "android" ->
+// "android edited", and an already-edited folder stays put instead of "… edited edited".
 const editedFolderFor = (folder) => `${String(folder || 'general').replace(/\s+edited$/i, '')} edited`;
 
 // Folders like "android edited edited" came from an old bug and should never be shown or kept
@@ -32,7 +38,6 @@ export default function Home() {
   const [userEmail, setUserEmail] = useState('');
   const [quota, setQuota] = useState(null); // { used, limit } — limit null = unlimited
   const [storageTotal, setStorageTotal] = useState(null); // { used, cap } — admin accounts only
-  const [folders, setFolders] = useState([]);
   const [currentFolder, setCurrentFolder] = useState('');
   const [folderInput, setFolderInput] = useState('');
   const [isUploading, setIsUploading] = useState(false);
@@ -77,7 +82,10 @@ export default function Home() {
   const settingsDirChosenRef = useRef(false);
   // Files are always removed from cloud storage once downloaded (keeps everyone inside the free storage)
   const deleteAfterDownload = true;
-  const [knownFolders, setKnownFolders] = useState([]);
+  // { folders: [...names in tab order], editTargets: { source: destination } } — saved on the account
+  const [folderPrefs, setFolderPrefs] = useState(null);
+  const [settingsTab, setSettingsTab] = useState('general');
+  const [newFolderName, setNewFolderName] = useState('');
 
   const fileInputRef = useRef(null);
   const lastChangeRef = useRef(0);
@@ -96,20 +104,32 @@ export default function Home() {
       setFolderInput(saved);
     }
     localStorage.removeItem('image_drop_delete_after_download'); // old setting, no longer used
-    const savedKnownFolders = localStorage.getItem('image_drop_known_folders');
-    if (savedKnownFolders) {
+    // Folder list + edit destinations live on the account (synced across devices).
+    // First time: start from this browser's old folder list, or the defaults.
+    (async () => {
       try {
-        const parsed = JSON.parse(savedKnownFolders);
-        if (Array.isArray(parsed)) {
-          // Drop leftover "android edited edited" style folders from an old bug
-          const cleaned = parsed.filter(name => !isStrayEditFolder(name));
-          if (cleaned.length > 0) setKnownFolders(cleaned);
-          if (cleaned.length !== parsed.length) {
-            localStorage.setItem('image_drop_known_folders', JSON.stringify(cleaned));
-          }
+        const { data } = await createSupabase().auth.getUser();
+        const saved = data?.user?.user_metadata?.koldrop_folders;
+        if (saved && Array.isArray(saved.folders)) {
+          setFolderPrefs({ folders: saved.folders, editTargets: saved.editTargets || {} });
+          return;
         }
-      } catch (e) {}
-    }
+        let start = DEFAULT_FOLDERS;
+        try {
+          const old = JSON.parse(localStorage.getItem('image_drop_known_folders') || 'null');
+          if (Array.isArray(old) && old.length) {
+            start = Array.from(new Set([...DEFAULT_FOLDERS, ...old.map(cleanFolderName)]))
+              .filter((n) => n && !isStrayEditFolder(n));
+          }
+        } catch {}
+        const prefs = { folders: start, editTargets: {} };
+        setFolderPrefs(prefs);
+        await createSupabase().auth.updateUser({ data: { koldrop_folders: prefs } });
+        localStorage.removeItem('image_drop_known_folders');
+      } catch {
+        setFolderPrefs({ folders: DEFAULT_FOLDERS, editTargets: {} });
+      }
+    })();
   }, []);
 
   const selectFolder = (name) => {
@@ -139,50 +159,6 @@ export default function Home() {
       if (data.quota) setQuota(data.quota);
       setStorageTotal(data.storageTotal || null);
 
-      // Extract unique folders from uploaded files
-      const folderMap = {};
-      loaded.forEach(f => {
-        if (f.folder) {
-          folderMap[f.folder] = (folderMap[f.folder] || 0) + 1;
-        }
-      });
-
-      // Merge permanent + known folders + folders from files so android/ios always remain visible
-      setKnownFolders(prev => {
-        const combined = Array.from(new Set([...PERMANENT_FOLDERS, ...prev, ...Object.keys(folderMap)]))
-          // Hide stray "… edited edited" folders, but keep them while they still hold files
-          .filter(name => !isStrayEditFolder(name) || (folderMap[name] || 0) > 0);
-        localStorage.setItem('image_drop_known_folders', JSON.stringify(combined));
-
-        const folderList = combined.map(name => ({
-          name,
-          count: folderMap[name] || 0
-        })).sort((a, b) => {
-          // Permanent folders (android, ios) always first, then the rest alphabetically
-          const aPerm = PERMANENT_FOLDERS.indexOf(a.name);
-          const bPerm = PERMANENT_FOLDERS.indexOf(b.name);
-          if (aPerm !== -1 || bPerm !== -1) {
-            if (aPerm === -1) return 1;
-            if (bPerm === -1) return -1;
-            return aPerm - bPerm;
-          }
-          return a.name.localeCompare(b.name);
-        });
-
-        setFolders(folderList);
-
-        // Auto select first available folder if none selected
-        if (!currentFolder && folderList.length > 0) {
-          const savedLast = localStorage.getItem('image_drop_last_folder');
-          const toSelect = (savedLast && folderList.some(f => f.name === savedLast))
-            ? savedLast
-            : folderList[0].name;
-          setCurrentFolder(toSelect);
-          setFolderInput(toSelect);
-        }
-
-        return combined;
-      });
     } catch (err) {
       console.error(err);
     } finally {
@@ -226,7 +202,7 @@ export default function Home() {
     setIsUploading(true);
     setUploadProgress(0);
 
-    const folder = (folderInput.trim() || 'general').replace(/[^a-zA-Z0-9_-]/g, '_').substring(0, 50);
+    const folder = cleanFolderName(folderInput) || 'general';
     const total = fileList.length;
     let successCount = 0;
 
@@ -278,6 +254,54 @@ export default function Home() {
       updated.add(url);
     }
     setSelectedUrls(updated);
+  };
+
+  // Tabs: the account's folders in their saved order, then any other folder that has files
+  const folders = useMemo(() => {
+    const counts = {};
+    files.forEach((f) => { if (f.folder) counts[f.folder] = (counts[f.folder] || 0) + 1; });
+    const saved = folderPrefs?.folders || DEFAULT_FOLDERS;
+    const extra = Object.keys(counts)
+      .filter((n) => !saved.includes(n) && (!isStrayEditFolder(n) || counts[n] > 0))
+      .sort((x, y) => x.localeCompare(y));
+    return [...saved, ...extra].map((name) => ({ name, count: counts[name] || 0 }));
+  }, [files, folderPrefs]);
+
+  // Keep a valid folder selected
+  useEffect(() => {
+    if (!folders.length) return;
+    if (currentFolder && folders.some((f) => f.name === currentFolder)) return;
+    const savedLast = localStorage.getItem('image_drop_last_folder');
+    const pick = savedLast && folders.some((f) => f.name === savedLast) ? savedLast : folders[0].name;
+    setCurrentFolder(pick);
+    setFolderInput(pick);
+  }, [folders]);
+
+  const saveFolderPrefs = async (next) => {
+    setFolderPrefs(next);
+    const { error } = await createSupabase().auth.updateUser({ data: { koldrop_folders: next } });
+    if (error) showToast(`❌ Couldn't save folder settings: ${error.message}`);
+  };
+
+  // Where edits of files in `folder` are saved
+  const editTargetFor = (folder) => folderPrefs?.editTargets?.[folder] || editedFolderFor(folder);
+
+  const handleAddFolder = async () => {
+    const name = cleanFolderName(newFolderName);
+    if (!name) return;
+    if (folders.some((f) => f.name.toLowerCase() === name.toLowerCase())) {
+      showToast(`Folder "${name}" already exists`);
+      return;
+    }
+    const prefs = folderPrefs || { folders: DEFAULT_FOLDERS, editTargets: {} };
+    await saveFolderPrefs({ ...prefs, folders: [...prefs.folders, name] });
+    setNewFolderName('');
+    showToast(`✓ Added folder "${name}"`);
+  };
+
+  const setEditTarget = (source, dest) => {
+    const prefs = folderPrefs || { folders: DEFAULT_FOLDERS, editTargets: {} };
+    saveFolderPrefs({ ...prefs, editTargets: { ...prefs.editTargets, [source]: dest } });
   };
 
   const currentFolderFiles = files.filter(f => f.folder === currentFolder);
@@ -525,8 +549,10 @@ export default function Home() {
   // Delete entire folder (all files inside + remove tab)
   const handleDeleteFolder = async (folderName, e) => {
     if (e) e.stopPropagation();
-    if (PERMANENT_FOLDERS.includes(folderName)) return; // android/ios are permanent
-    if (!confirm(`Delete folder "${folderName}" and all files inside?`)) return;
+    const count = files.filter(f => f.folder === folderName).length;
+    if (!confirm(count
+      ? `Delete folder "${folderName}" and the ${count} file(s) inside?`
+      : `Remove folder "${folderName}"?`)) return;
 
     try {
       const folderFiles = files.filter(f => f.folder === folderName);
@@ -538,14 +564,14 @@ export default function Home() {
         });
       }
 
-      // Remove from known folders list in state & localStorage
-      let updatedFolders = [];
-      setKnownFolders(prev => {
-        const remaining = prev.filter(name => name !== folderName);
-        updatedFolders = remaining;
-        localStorage.setItem('image_drop_known_folders', JSON.stringify(remaining));
-        return remaining;
-      });
+      // Remove it from the account's folders, and any edit destinations pointing at it
+      const prefs = folderPrefs || { folders: DEFAULT_FOLDERS, editTargets: {} };
+      const editTargets = Object.fromEntries(
+        Object.entries(prefs.editTargets || {}).filter(([src, dest]) => src !== folderName && dest !== folderName)
+      );
+      const remainingFolders = prefs.folders.filter(name => name !== folderName);
+      await saveFolderPrefs({ folders: remainingFolders, editTargets });
+      const updatedFolders = remainingFolders;
 
       // If active folder was deleted, switch to another existing folder or blank
       if (currentFolder === folderName) {
@@ -918,7 +944,7 @@ export default function Home() {
     if (!editingFile || !canvasRef.current || !img) return;
     const ext = (editingFile.name.substring(editingFile.name.lastIndexOf('.')) || '.jpg').toLowerCase();
     const mime = ext === '.png' ? 'image/png' : 'image/jpeg';
-    const folder = editedFolderFor(editingFile.folder);
+    const folder = editTargetFor(editingFile.folder);
     // Save under exactly the name the user typed. Only strip characters that are illegal in a
     // path, and add _2, _3, ... if that name is already used in this folder.
     const fallback = editingFile.name.replace(/\.[^.]+$/, '') || 'image';
@@ -943,6 +969,9 @@ export default function Home() {
       if (!blob) throw new Error('Could not render image');
       await uploadFile(pathname, blob);
       showToast(`✓ Saved as "${filename}"`);
+      if (folderPrefs && !folderPrefs.folders.includes(folder)) {
+        saveFolderPrefs({ ...folderPrefs, folders: [...folderPrefs.folders, folder] });
+      }
       setEditingFile(null);
       setCurrentFolder(folder);
       refreshAfterChange();
@@ -1013,7 +1042,7 @@ export default function Home() {
           <div style={{ fontSize: '42px', marginBottom: '8px' }}>☁️</div>
           <h3 style={{ margin: 0, fontSize: '18px' }}>Tap to select photos/videos or drag & drop</h3>
           <p style={{ margin: '8px 0 0', color: '#888', fontSize: '14px' }}>
-            Supports photos & screen recordings (MP4, MOV, WebM, etc.) • Up to 250MB
+            Supports photos & screen recordings (MP4, MOV, WebM, etc.) • Up to {Math.round(MAX_UPLOAD_BYTES / 1e6)}MB
           </p>
           <input
             type="file"
@@ -1244,75 +1273,153 @@ export default function Home() {
               padding: '24px', maxWidth: '480px', width: '100%', color: '#e8e8e8'
             }}
           >
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
-              <h3 style={{ margin: 0, fontSize: '18px' }}>⚙️ Download & Save Settings</h3>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
+              <h3 style={{ margin: 0, fontSize: '18px' }}>⚙️ Settings</h3>
               <button onClick={() => setShowSettings(false)} style={{ background: 'none', border: 'none', color: '#888', fontSize: '20px', cursor: 'pointer' }}>✕</button>
             </div>
 
-            <div style={{ fontSize: '14px', color: '#bbb', lineHeight: '1.5', marginBottom: '20px' }}>
-              <p style={{ marginTop: 0 }}>
-                <strong>Direct Laptop Folder:</strong> You can select a dedicated folder on your laptop (e.g. <code>Downloads/ImageDrop</code>) where downloaded files and ZIP packages will be saved directly.
-              </p>
+            {/* Menus */}
+            <div style={{ display: 'flex', gap: '6px', marginBottom: '18px', background: '#161616', padding: '4px', borderRadius: '10px' }}>
+              {[['general', 'General'], ['download', 'Download folder'], ['folders', 'Folders']].map(([id, label]) => (
+                <button
+                  key={id}
+                  onClick={() => setSettingsTab(id)}
+                  style={{
+                    flex: 1, padding: '8px 6px', borderRadius: '8px', border: 'none', cursor: 'pointer',
+                    fontSize: '13px', fontWeight: 600,
+                    background: settingsTab === id ? '#6c63ff' : 'transparent',
+                    color: settingsTab === id ? '#fff' : '#999',
+                  }}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
 
-              {customDirName ? (
-                <div style={{ background: '#252525', padding: '12px', borderRadius: '8px', marginBottom: '12px' }}>
-                  <div style={{ color: '#4caf50', fontWeight: 600 }}>✓ Direct Folder Selected:</div>
-                  <div style={{ fontSize: '13px', marginTop: '4px', wordBreak: 'break-all' }}>📁 {customDirName}</div>
-                </div>
-              ) : (
-                <div style={{ background: '#252525', padding: '12px', borderRadius: '8px', marginBottom: '12px', color: '#888' }}>
-                  No dedicated folder chosen yet. Files go to your standard browser Downloads.
-                </div>
-              )}
-
-              <button onClick={handlePickDirectory} style={btnPrimary}>
-                📁 {customDirName ? 'Change Folder' : 'Choose Download Folder'}
-              </button>
-
-              <hr style={{ border: 'none', borderTop: '1px solid #333', margin: '20px 0' }} />
-
-              {quota && (
-                <div style={{ marginBottom: '16px' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px', marginBottom: '6px' }}>
-                    <strong>Your storage</strong>
-                    <span style={{ color: '#aaa' }}>
-                      {(quota.used / 1e6).toFixed(1)} MB{quota.limit ? ` of ${Math.round(quota.limit / 1e6)} MB` : ' · no limit'}
-                    </span>
-                  </div>
-                  {quota.limit && (
-                    <div style={{ height: '6px', background: '#2a2a2a', borderRadius: '3px', overflow: 'hidden' }}>
-                      <div style={{
-                        height: '100%', width: `${Math.min(100, (quota.used / quota.limit) * 100)}%`,
-                        background: quota.used / quota.limit > 0.9 ? '#e84057' : '#6c63ff',
-                      }} />
+            <div style={{ fontSize: '14px', color: '#bbb', lineHeight: '1.5', marginBottom: '20px', maxHeight: '60vh', overflowY: 'auto' }}>
+              {settingsTab === 'general' && (
+                <>
+                  {quota && (
+                    <div style={{ marginBottom: '16px' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px', marginBottom: '6px' }}>
+                        <strong>Your storage</strong>
+                        <span style={{ color: '#aaa' }}>
+                          {(quota.used / 1e6).toFixed(1)} MB{quota.limit ? ` of ${Math.round(quota.limit / 1e6)} MB` : ' · no limit'}
+                        </span>
+                      </div>
+                      {quota.limit && (
+                        <div style={{ height: '6px', background: '#2a2a2a', borderRadius: '3px', overflow: 'hidden' }}>
+                          <div style={{
+                            height: '100%', width: `${Math.min(100, (quota.used / quota.limit) * 100)}%`,
+                            background: quota.used / quota.limit > 0.9 ? '#e84057' : '#6c63ff',
+                          }} />
+                        </div>
+                      )}
                     </div>
                   )}
-                </div>
+
+                  {storageTotal && (
+                    <div style={{ marginBottom: '16px' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px', marginBottom: '6px' }}>
+                        <strong>All of Koldrop</strong>
+                        <span style={{ color: '#aaa' }}>
+                          {(storageTotal.used / 1e9).toFixed(2)} GB of {Math.round(storageTotal.cap / 1e9)} GB
+                        </span>
+                      </div>
+                      <div style={{ height: '6px', background: '#2a2a2a', borderRadius: '3px', overflow: 'hidden' }}>
+                        <div style={{
+                          height: '100%', width: `${Math.min(100, (storageTotal.used / storageTotal.cap) * 100)}%`,
+                          background: storageTotal.used / storageTotal.cap > 0.9 ? '#e84057' : '#4caf50',
+                        }} />
+                      </div>
+                      <div style={{ fontSize: '11px', color: '#666', marginTop: '4px' }}>
+                        Everyone's files together · uploads stop at the cap · only you can see this
+                      </div>
+                    </div>
+                  )}
+
+                </>
               )}
 
-              {storageTotal && (
-                <div style={{ marginBottom: '16px' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px', marginBottom: '6px' }}>
-                    <strong>All of Koldrop</strong>
-                    <span style={{ color: '#aaa' }}>
-                      {(storageTotal.used / 1e9).toFixed(2)} GB of {Math.round(storageTotal.cap / 1e9)} GB
-                    </span>
-                  </div>
-                  <div style={{ height: '6px', background: '#2a2a2a', borderRadius: '3px', overflow: 'hidden' }}>
-                    <div style={{
-                      height: '100%', width: `${Math.min(100, (storageTotal.used / storageTotal.cap) * 100)}%`,
-                      background: storageTotal.used / storageTotal.cap > 0.9 ? '#e84057' : '#4caf50',
-                    }} />
-                  </div>
-                  <div style={{ fontSize: '11px', color: '#666', marginTop: '4px' }}>
-                    Everyone's files together · uploads stop at the cap · only you can see this
-                  </div>
-                </div>
+              {settingsTab === 'download' && (
+                <>
+                  <p style={{ marginTop: 0 }}>
+                    <strong>Direct Laptop Folder:</strong> You can select a dedicated folder on your laptop (e.g. <code>Downloads/ImageDrop</code>) where downloaded files and ZIP packages will be saved directly.
+                  </p>
+
+                  {customDirName ? (
+                    <div style={{ background: '#252525', padding: '12px', borderRadius: '8px', marginBottom: '12px' }}>
+                      <div style={{ color: '#4caf50', fontWeight: 600 }}>✓ Direct Folder Selected:</div>
+                      <div style={{ fontSize: '13px', marginTop: '4px', wordBreak: 'break-all' }}>📁 {customDirName}</div>
+                    </div>
+                  ) : (
+                    <div style={{ background: '#252525', padding: '12px', borderRadius: '8px', marginBottom: '12px', color: '#888' }}>
+                      No dedicated folder chosen yet. Files go to your standard browser Downloads.
+                    </div>
+                  )}
+
+                  <button onClick={handlePickDirectory} style={btnPrimary}>
+                    📁 {customDirName ? 'Change Folder' : 'Choose Download Folder'}
+                  </button>
+
+                  <p style={{ fontSize: '13px', color: '#777', margin: '16px 0 0' }}>
+                    💡 <em>Tip for Mobile:</em> On iOS and Android, downloads automatically save to your device's Files app or default Downloads folder.
+                  </p>
+
+                </>
               )}
 
-              <p style={{ fontSize: '13px', color: '#777', margin: 0 }}>
-                💡 <em>Tip for Mobile:</em> On iOS and Android, downloads automatically save to your device's Files app or default Downloads folder.
-              </p>
+              {settingsTab === 'folders' && (
+                <>
+                  <p style={{ marginTop: 0, fontSize: '13px', color: '#999' }}>
+                    Your folders appear as tabs. Choose where edited images from each folder are saved.
+                    Saved on your account, so it's the same on every device.
+                  </p>
+
+                  <div style={{ display: 'flex', gap: '8px', marginBottom: '16px' }}>
+                    <input
+                      value={newFolderName}
+                      onChange={(e) => setNewFolderName(e.target.value)}
+                      onKeyDown={(e) => { if (e.key === 'Enter') handleAddFolder(); }}
+                      placeholder="New folder name"
+                      maxLength={50}
+                      style={{ flex: 1, minWidth: 0, background: '#252525', border: '1px solid #333', color: '#e8e8e8', padding: '8px 12px', borderRadius: '8px', fontSize: '13px', outline: 'none' }}
+                    />
+                    <button onClick={handleAddFolder} style={btnPrimary}>＋ Add</button>
+                  </div>
+
+                  {folders.map((f) => (
+                    <div key={f.name} style={{ background: '#252525', borderRadius: '8px', padding: '10px 12px', marginBottom: '8px' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
+                        <span style={{ color: '#e8e8e8', fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          📁 {f.name} <span style={{ color: '#777', fontWeight: 400, fontSize: '12px' }}>({f.count})</span>
+                        </span>
+                        <button
+                          onClick={() => handleDeleteFolder(f.name)}
+                          title={f.count ? 'Remove folder and its files' : 'Remove folder'}
+                          style={{ ...btnGhost, color: '#e84057', borderColor: '#4a2a2f', padding: '4px 10px' }}
+                        >
+                          Remove
+                        </button>
+                      </div>
+                      <label style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '8px', fontSize: '12px', color: '#999' }}>
+                        Edits go to
+                        <select
+                          value={editTargetFor(f.name)}
+                          onChange={(e) => setEditTarget(f.name, e.target.value)}
+                          style={{ flex: 1, minWidth: 0, background: '#1a1a1a', border: '1px solid #333', color: '#e8e8e8', padding: '6px 8px', borderRadius: '6px', fontSize: '12px' }}
+                        >
+                          {Array.from(new Set([editTargetFor(f.name), f.name, editedFolderFor(f.name), ...folders.map((o) => o.name)])).map((name) => (
+                            <option key={name} value={name}>
+                              {name === f.name ? `${name} (same folder)` : folders.some((o) => o.name === name) ? name : `${name} (new)`}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    </div>
+                  ))}
+                </>
+              )}
             </div>
 
             <button onClick={() => setShowSettings(false)} style={{ ...btnGhost, width: '100%', padding: '10px' }}>
@@ -1536,7 +1643,7 @@ export default function Home() {
               />
               <button onClick={() => setEditingFile(null)} style={btnGhost}>Cancel</button>
               <button onClick={saveEditedImage} disabled={isUploading} style={btnPrimary}>
-                💾 Save to "{editedFolderFor(editingFile.folder)}"
+                💾 Save to "{editTargetFor(editingFile.folder)}"
               </button>
             </div>
           </div>
