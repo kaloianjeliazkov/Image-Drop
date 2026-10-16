@@ -51,14 +51,15 @@ export default function Home() {
   const [editingFile, setEditingFile] = useState(null);
   const [editName, setEditName] = useState('');
   const [annotations, setAnnotations] = useState([]);
-  const [tempArrow, setTempArrow] = useState(null);
-  const [editTool, setEditTool] = useState('arrow');
-  const [arrowColor, setArrowColor] = useState('#ff3b30'); // arrows: red (default) or green
+  const [tempShape, setTempShape] = useState(null); // arrow / box / crop being drawn
+  const [editTool, setEditTool] = useState('arrow'); // 'arrow' | 'box' | 'text' | 'crop'
+  const [arrowColor, setArrowColor] = useState('#ff3b30'); // arrows & boxes: red (default) or green
+  const [selectedAnn, setSelectedAnn] = useState(-1); // index of the box/crop/arrow/text last touched
   const [textDraft, setTextDraft] = useState(null);
   const [hoverAnn, setHoverAnn] = useState(false);
   const canvasRef = useRef(null);
   const editImageRef = useRef(null);
-  const arrowRef = useRef(null);
+  const shapeRef = useRef(null);
   const dragAnnRef = useRef(null);
   // Undo / redo history for annotations
   const annotationsRef = useRef([]);
@@ -664,9 +665,10 @@ export default function Home() {
     annotationsRef.current = [];
     undoStackRef.current = [];
     redoStackRef.current = [];
-    setTempArrow(null);
+    setTempShape(null);
     setTextDraft(null);
     setHoverAnn(false);
+    setSelectedAnn(-1);
     setEditTool('arrow');
   };
 
@@ -681,17 +683,30 @@ export default function Home() {
     };
   };
 
+  // Rectangle from two corners, always with positive width/height
+  const rectFrom = (x1, y1, x2, y2) => ({
+    x: Math.min(x1, x2), y: Math.min(y1, y2), w: Math.abs(x2 - x1), h: Math.abs(y2 - y1),
+  });
+  const cropOf = (list) => (list || []).find((a) => a.type === 'crop') || null;
+
   // Paint the image and annotations onto a canvas of any size. Annotations are stored in
-  // editor-canvas coordinates, so they get scaled up when saving at the original resolution
-  const paintEdit = (target, list) => {
+  // editor-canvas coordinates. For the editor view (`preview`) the crop is shown as a dimmed
+  // overlay with handles; for export the output is cut to the crop area at full resolution.
+  const paintEdit = (target, list, { preview = false, selected = -1 } = {}) => {
     const view = canvasRef.current;
     const ctx = target.getContext('2d');
+    const crop = preview ? null : cropOf(list);
+    const area = crop || { x: 0, y: 0, w: view.width, h: view.height };
+    const sx = target.width / area.w;
+    const sy = target.height / area.h;
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, target.width, target.height);
-    ctx.drawImage(editImageRef.current, 0, 0, target.width, target.height);
-    ctx.setTransform(target.width / view.width, 0, 0, target.height / view.height, 0, 0);
+    ctx.setTransform(sx, 0, 0, sy, -area.x * sx, -area.y * sy);
+    ctx.drawImage(editImageRef.current, 0, 0, view.width, view.height);
     const k = annK(view.width, view.height);
+
     const drawOne = (a) => {
+      if (a.type === 'crop') return; // shown as an overlay / applied on export
       if (a.type === 'text') {
         ctx.font = `bold ${32 * k}px sans-serif`;
         ctx.textBaseline = 'middle'; // (x, y) is the left middle of the text, where the text field sat
@@ -701,6 +716,15 @@ export default function Home() {
         ctx.fillStyle = '#ffffff';
         ctx.strokeText(a.text, a.x, a.y);
         ctx.fillText(a.text, a.x, a.y);
+      } else if (a.type === 'box') {
+        ctx.lineJoin = 'round';
+        // Dark edge under the colour, like the arrows, so it shows on any background
+        ctx.strokeStyle = 'rgba(0,0,0,0.55)';
+        ctx.lineWidth = 8 * k;
+        ctx.strokeRect(a.x, a.y, a.w, a.h);
+        ctx.strokeStyle = a.color || '#ff3b30';
+        ctx.lineWidth = 5 * k;
+        ctx.strokeRect(a.x, a.y, a.w, a.h);
       } else {
         const angle = Math.atan2(a.y2 - a.y1, a.x2 - a.x1);
         const head = 22 * k;
@@ -735,13 +759,51 @@ export default function Home() {
       }
     };
     list.forEach(drawOne);
+
+    if (preview) {
+      const handles = (r) => {
+        const hs = 12 * k;
+        ctx.fillStyle = '#ffffff';
+        ctx.strokeStyle = 'rgba(0,0,0,0.8)';
+        ctx.lineWidth = 2 * k;
+        rectCorners(r).forEach(([cx, cy]) => {
+          ctx.fillRect(cx - hs / 2, cy - hs / 2, hs, hs);
+          ctx.strokeRect(cx - hs / 2, cy - hs / 2, hs, hs);
+        });
+      };
+      // Crop: dim everything outside the kept area
+      const c = cropOf(list);
+      if (c) {
+        ctx.fillStyle = 'rgba(0,0,0,0.6)';
+        ctx.beginPath();
+        ctx.rect(0, 0, view.width, view.height);
+        ctx.rect(c.x, c.y, c.w, c.h);
+        ctx.fill('evenodd');
+        ctx.setLineDash([10 * k, 6 * k]);
+        ctx.strokeStyle = '#ffffff';
+        ctx.lineWidth = 2 * k;
+        ctx.strokeRect(c.x, c.y, c.w, c.h);
+        ctx.setLineDash([]);
+        handles(c);
+      }
+      // Resize handles on the selected box
+      const sel = list[selected];
+      if (sel && sel.type === 'box') handles(sel);
+    }
     ctx.setTransform(1, 0, 0, 1, 0, 0);
   };
+
+  const rectCorners = (r) => [[r.x, r.y], [r.x + r.w, r.y], [r.x, r.y + r.h], [r.x + r.w, r.y + r.h]];
 
   const redraw = () => {
     const canvas = canvasRef.current;
     if (!canvas || !editImageRef.current) return;
-    paintEdit(canvas, tempArrow ? [...annotations, tempArrow] : annotations);
+    let list = annotations;
+    if (tempShape) {
+      // A new crop replaces the old one while it's being drawn
+      list = tempShape.type === 'crop' ? [...annotations.filter((a) => a.type !== 'crop'), tempShape] : [...annotations, tempShape];
+    }
+    paintEdit(canvas, list, { preview: true, selected: tempShape ? -1 : selectedAnn });
   };
 
   // ---- Undo / redo history ----
@@ -754,14 +816,26 @@ export default function Home() {
     if (undoStackRef.current.length === 0) return;
     redoStackRef.current.push(snapshot(annotationsRef.current));
     setTextDraft(null);
+    setSelectedAnn(-1);
     setAnnotations(undoStackRef.current.pop());
   };
   const redo = () => {
     if (redoStackRef.current.length === 0) return;
     undoStackRef.current.push(snapshot(annotationsRef.current));
     setTextDraft(null);
+    setSelectedAnn(-1);
     setAnnotations(redoStackRef.current.pop());
   };
+
+  // Remove the selected annotation (Delete key / button)
+  const deleteSelected = () => {
+    if (selectedAnn < 0 || !annotations[selectedAnn]) return;
+    pushUndo();
+    setAnnotations((prev) => prev.filter((_, i) => i !== selectedAnn));
+    setSelectedAnn(-1);
+  };
+  const deleteSelectedRef = useRef(deleteSelected);
+  deleteSelectedRef.current = deleteSelected;
 
   // Load the image once when the editor opens
   useEffect(() => {
@@ -809,7 +883,7 @@ export default function Home() {
   // Redraw when annotations change
   useEffect(() => {
     if (editingFile) redraw();
-  }, [annotations, tempArrow]);
+  }, [annotations, tempShape, selectedAnn]);
 
   // Keep a ref of the annotations in sync (used by undo/redo)
   useEffect(() => {
@@ -823,6 +897,12 @@ export default function Home() {
       const tag = (e.target && e.target.tagName) || '';
       if (tag === 'INPUT' || tag === 'TEXTAREA') return; // let inputs handle their own undo
       const mod = e.ctrlKey || e.metaKey;
+      // Delete / Backspace removes the selected box, arrow, text or crop
+      if (!mod && (e.key === 'Delete' || e.key === 'Backspace')) {
+        e.preventDefault();
+        deleteSelectedRef.current();
+        return;
+      }
       if (!mod) return;
       const key = (e.key || '').toLowerCase();
       if (key === 'z' && !e.shiftKey) {
@@ -848,7 +928,35 @@ export default function Home() {
     return Math.hypot(p.x - cx, p.y - cy);
   };
 
-  // Find the topmost annotation (text or arrow) under point p
+  // Near the outline of a rectangle (not inside it, so you can still draw arrows inside a box)
+  const nearRectEdge = (p, r, m) =>
+    p.x >= r.x - m && p.x <= r.x + r.w + m && p.y >= r.y - m && p.y <= r.y + r.h + m &&
+    !(p.x > r.x + m && p.x < r.x + r.w - m && p.y > r.y + m && p.y < r.y + r.h - m);
+
+  // Corner handle of the selected box (or the crop) under p → which corner stays fixed
+  const findHandleAt = (p) => {
+    const canvas = canvasRef.current;
+    if (!canvas) return null;
+    const k = annK(canvas.width, canvas.height);
+    const candidates = [];
+    if (annotations[selectedAnn]?.type === 'box') candidates.push(selectedAnn);
+    const ci = annotations.findIndex((a) => a.type === 'crop');
+    if (ci >= 0) candidates.push(ci);
+    for (const index of candidates) {
+      const r = annotations[index];
+      const corners = rectCorners(r);
+      for (let c = 0; c < 4; c++) {
+        const [cx, cy] = corners[c];
+        if (Math.hypot(p.x - cx, p.y - cy) <= 16 * k) {
+          const [fx, fy] = corners[3 - c]; // the opposite corner
+          return { index, fixed: { x: fx, y: fy } };
+        }
+      }
+    }
+    return null;
+  };
+
+  // Find the topmost annotation under point p
   const findAnnotationAt = (p) => {
     const canvas = canvasRef.current;
     if (!canvas) return -1;
@@ -859,6 +967,8 @@ export default function Home() {
       const a = annotations[i];
       if (a.type === 'arrow') {
         if (distToSegment(p, { x: a.x1, y: a.y1 }, { x: a.x2, y: a.y2 }) <= 12 * k) return i;
+      } else if (a.type === 'box' || a.type === 'crop') {
+        if (nearRectEdge(p, a, 12 * k)) return i;
       } else {
         const w = ctx.measureText(a.text).width;
         if (p.x >= a.x - 10 * k && p.x <= a.x + w + 10 * k && p.y >= a.y - 22 * k && p.y <= a.y + 22 * k) return i;
@@ -875,60 +985,99 @@ export default function Home() {
       return;
     }
     const p = canvasPos(e);
-    const idx = findAnnotationAt(p);
-    if (idx >= 0) {
-      // Drag the existing annotation (text or arrow), in any tool mode
+    const handle = findHandleAt(p);
+    const idx = handle ? -1 : findAnnotationAt(p);
+    if (handle) {
+      // Resize a box or the crop by its corner
       pushUndo();
+      setSelectedAnn(handle.index);
+      dragAnnRef.current = { index: handle.index, mode: 'resize', fixed: handle.fixed };
+    } else if (idx >= 0) {
+      // Drag the existing annotation, in any tool mode
+      pushUndo();
+      setSelectedAnn(idx);
       const a = annotations[idx];
       const anchor = a.type === 'arrow' ? { x: a.x1, y: a.y1 } : { x: a.x, y: a.y };
-      dragAnnRef.current = { index: idx, dx: p.x - anchor.x, dy: p.y - anchor.y };
-    } else if (editTool === 'arrow') {
-      arrowRef.current = { x1: p.x, y1: p.y, x2: p.x, y2: p.y, color: arrowColor };
-    } else {
+      dragAnnRef.current = { index: idx, mode: 'move', dx: p.x - anchor.x, dy: p.y - anchor.y };
+    } else if (editTool === 'text') {
+      setSelectedAnn(-1);
       setTextDraft({ x: p.x, y: p.y, value: '' });
       return;
+    } else {
+      setSelectedAnn(-1);
+      // Arrow, box or crop: drag out from here
+      shapeRef.current = { type: editTool, x1: p.x, y1: p.y, x2: p.x, y2: p.y, color: arrowColor };
     }
     // Keep getting moves and the release even if the pointer leaves the canvas mid-drag
     e.currentTarget.setPointerCapture(e.pointerId);
   };
 
+  // What the shape being drawn looks like as an annotation
+  const shapeToAnnotation = (sh) => {
+    if (!sh) return null;
+    if (sh.type === 'arrow') return { type: 'arrow', x1: sh.x1, y1: sh.y1, x2: sh.x2, y2: sh.y2, color: sh.color };
+    const r = rectFrom(sh.x1, sh.y1, sh.x2, sh.y2);
+    return sh.type === 'crop' ? { type: 'crop', ...r } : { type: 'box', ...r, color: sh.color };
+  };
+
   const onCanvasPointerMove = (e) => {
     if (dragAnnRef.current) {
       const p = canvasPos(e);
-      const { index, dx, dy } = dragAnnRef.current;
+      const canvas = canvasRef.current;
+      const drag = dragAnnRef.current;
       setAnnotations(prev => prev.map((a, i) => {
-        if (i !== index) return a;
+        if (i !== drag.index) return a;
+        if (drag.mode === 'resize') {
+          return { ...a, ...rectFrom(drag.fixed.x, drag.fixed.y, p.x, p.y) };
+        }
         if (a.type === 'arrow') {
           return {
             ...a,
-            x1: p.x - dx, y1: p.y - dy,
-            x2: p.x - dx + (a.x2 - a.x1),
-            y2: p.y - dy + (a.y2 - a.y1)
+            x1: p.x - drag.dx, y1: p.y - drag.dy,
+            x2: p.x - drag.dx + (a.x2 - a.x1),
+            y2: p.y - drag.dy + (a.y2 - a.y1)
           };
         }
-        return { ...a, x: p.x - dx, y: p.y - dy };
+        if (a.type === 'crop') {
+          // The crop can't be dragged off the picture
+          return {
+            ...a,
+            x: Math.max(0, Math.min(canvas.width - a.w, p.x - drag.dx)),
+            y: Math.max(0, Math.min(canvas.height - a.h, p.y - drag.dy)),
+          };
+        }
+        return { ...a, x: p.x - drag.dx, y: p.y - drag.dy };
       }));
-    } else if (arrowRef.current) {
+    } else if (shapeRef.current) {
       const p = canvasPos(e);
-      arrowRef.current = { ...arrowRef.current, x2: p.x, y2: p.y };
-      setTempArrow(arrowRef.current);
+      shapeRef.current = { ...shapeRef.current, x2: p.x, y2: p.y };
+      setTempShape(shapeToAnnotation(shapeRef.current));
     } else {
-      // Show the move cursor over any text or arrow that can be dragged
-      setHoverAnn(findAnnotationAt(canvasPos(e)) >= 0);
+      // Move/resize cursors over anything that can be dragged
+      const p = canvasPos(e);
+      setHoverAnn(findHandleAt(p) ? 'resize' : findAnnotationAt(p) >= 0 ? 'move' : false);
     }
   };
 
   const onCanvasPointerUp = () => {
-    // Read the arrow from the ref, not tempArrow state: on a quick flick the release arrives
-    // before React re-renders with the last move, and the arrow used to be dropped
-    const arrow = arrowRef.current;
-    if (arrow && Math.hypot(arrow.x2 - arrow.x1, arrow.y2 - arrow.y1) >= 8) {
-      pushUndo();
-      setAnnotations(prev => [...prev, { type: 'arrow', ...arrow }]);
+    // Read the shape from the ref, not tempShape state: on a quick flick the release arrives
+    // before React re-renders with the last move, and the shape used to be dropped
+    const sh = shapeRef.current;
+    if (sh && Math.hypot(sh.x2 - sh.x1, sh.y2 - sh.y1) >= 8) {
+      const ann = shapeToAnnotation(sh);
+      const isRect = ann.type !== 'arrow';
+      if (!isRect || (ann.w >= 8 && ann.h >= 8)) {
+        pushUndo();
+        const base = ann.type === 'crop' ? annotations.filter((x) => x.type !== 'crop') : annotations;
+        const next = [...base, ann];
+        setAnnotations(next);
+        setSelectedAnn(next.length - 1);
+      }
     }
-    arrowRef.current = null;
+    // A resize that ended "inside out" or too small is normalised by rectFrom already
+    shapeRef.current = null;
     dragAnnRef.current = null;
-    setTempArrow(null);
+    setTempShape(null);
   };
 
   const commitTextDraft = () => {
@@ -939,9 +1088,46 @@ export default function Home() {
     setTextDraft(null);
   };
 
-  const saveEditedImage = async () => {
+  // The finished image at full resolution, cut to the crop if there is one
+  const renderEdited = () => {
     const img = editImageRef.current;
-    if (!editingFile || !canvasRef.current || !img) return;
+    const view = canvasRef.current;
+    if (!img || !view) return null;
+    const crop = cropOf(annotations);
+    const fx = img.width / view.width;
+    const fy = img.height / view.height;
+    const w = (crop ? crop.w : view.width) * fx;
+    const h = (crop ? crop.h : view.height) * fy;
+    // Biggest canvas iOS can export; larger results are scaled down to it
+    const shrink = Math.min(1, Math.sqrt(MAX_EXPORT_PIXELS / (w * h)));
+    const out = document.createElement('canvas');
+    out.width = Math.max(1, Math.floor(w * shrink));
+    out.height = Math.max(1, Math.floor(h * shrink));
+    paintEdit(out, annotations);
+    return out;
+  };
+
+  // Copy the edited image (PNG) to the clipboard, ready to paste into Jira / Slack / Teams
+  const copyEditedImage = async () => {
+    if (!navigator.clipboard || typeof ClipboardItem === 'undefined') {
+      showToast('❌ This browser can\'t copy images — use Save instead');
+      return;
+    }
+    try {
+      const out = renderEdited();
+      if (!out) return;
+      // Pass a promise so Safari keeps the click as the user gesture while the PNG is made
+      const png = new Promise((resolve, reject) =>
+        out.toBlob((b) => (b ? resolve(b) : reject(new Error('Could not render image'))), 'image/png'));
+      await navigator.clipboard.write([new ClipboardItem({ 'image/png': png })]);
+      showToast('✓ Copied — paste it anywhere (Ctrl+V)');
+    } catch (err) {
+      showToast(`❌ Copy failed: ${err.message || 'not allowed'}`);
+    }
+  };
+
+  const saveEditedImage = async () => {
+    if (!editingFile || !canvasRef.current || !editImageRef.current) return;
     const ext = (editingFile.name.substring(editingFile.name.lastIndexOf('.')) || '.jpg').toLowerCase();
     const mime = ext === '.png' ? 'image/png' : 'image/jpeg';
     const folder = editTargetFor(editingFile.folder);
@@ -959,12 +1145,8 @@ export default function Home() {
     setIsUploading(true);
     setUploadStatus(`Saving edited image to "${folder}"...`);
     try {
-      // Render at the image's original resolution, not the smaller size shown in the editor
-      const shrink = Math.min(1, Math.sqrt(MAX_EXPORT_PIXELS / (img.width * img.height)));
-      const out = document.createElement('canvas');
-      out.width = Math.floor(img.width * shrink);
-      out.height = Math.floor(img.height * shrink);
-      paintEdit(out, annotations);
+      // Render at the image's original resolution (cut to the crop), not the editor's size
+      const out = renderEdited();
       const blob = await new Promise(res => out.toBlob(res, mime, 0.92));
       if (!blob) throw new Error('Could not render image');
       await uploadFile(pathname, blob);
@@ -1552,7 +1734,7 @@ export default function Home() {
                 onPointerLeave={() => setHoverAnn(false)}
                 // Stop the browser moving focus off the text field we just opened (and selecting page text while dragging)
                 onMouseDown={(e) => e.preventDefault()}
-                style={{ display: 'block', maxWidth: '90vw', maxHeight: 'calc(100vh - 150px)', width: 'auto', height: 'auto', borderRadius: '8px', cursor: hoverAnn ? 'move' : editTool === 'text' ? 'text' : 'crosshair', background: '#000', touchAction: 'none' }}
+                style={{ display: 'block', maxWidth: '90vw', maxHeight: 'calc(100vh - 150px)', width: 'auto', height: 'auto', borderRadius: '8px', cursor: hoverAnn === 'resize' ? 'nwse-resize' : hoverAnn ? 'move' : editTool === 'text' ? 'text' : 'crosshair', background: '#000', touchAction: 'none' }}
               />
               {textDraft && (() => {
                 const canvas = canvasRef.current;
@@ -1595,13 +1777,13 @@ export default function Home() {
             padding: '10px 16px 14px'
           }}>
             <div style={{ fontSize: '11px', color: '#777', marginBottom: '8px', textAlign: 'center' }}>
-              {editTool === 'arrow' ? 'Drag on the image to draw an arrow' : 'Click the image to place text'}
-              {' • '}drag any text or arrow to move it • Ctrl+Z / Ctrl+Y
+              {{ arrow: 'Drag to draw an arrow', box: 'Drag to draw a box', text: 'Click to place text', crop: 'Drag to choose the area to keep' }[editTool]}
+              {' • '}click something to select, drag to move, corners to resize • Delete removes • Ctrl+Z / Ctrl+Y
             </div>
             <div style={{ display: 'flex', gap: '8px', alignItems: 'center', justifyContent: 'center', flexWrap: 'wrap' }}>
               <button
-                onClick={() => { setArrowColor('#ff3b30'); setEditTool('arrow'); }}
-                title="Draw arrows in red"
+                onClick={() => { setArrowColor('#ff3b30'); if (editTool !== 'box') setEditTool('arrow'); }}
+                title="Red arrows and boxes"
                 aria-label="Red arrow color"
                 style={{
                   width: '26px', height: '26px', borderRadius: '50%', padding: 0, cursor: 'pointer',
@@ -1609,8 +1791,8 @@ export default function Home() {
                 }}
               />
               <button
-                onClick={() => { setArrowColor('#34c759'); setEditTool('arrow'); }}
-                title="Draw arrows in green"
+                onClick={() => { setArrowColor('#34c759'); if (editTool !== 'box') setEditTool('arrow'); }}
+                title="Green arrows and boxes"
                 aria-label="Green arrow color"
                 style={{
                   width: '26px', height: '26px', borderRadius: '50%', padding: 0, cursor: 'pointer',
@@ -1622,14 +1804,28 @@ export default function Home() {
                 style={editTool === 'arrow' ? btnPrimary : btnGhost}
                 title="Drag on the image to draw an arrow"
               >
-                ↗️ Add arrow
+                ↗️ Arrow
+              </button>
+              <button
+                onClick={() => setEditTool('box')}
+                style={editTool === 'box' ? btnPrimary : btnGhost}
+                title="Drag on the image to draw a box; drag its corners to resize"
+              >
+                ▢ Box
               </button>
               <button
                 onClick={() => setEditTool('text')}
                 style={editTool === 'text' ? btnPrimary : btnGhost}
                 title="Click on the image to add text"
               >
-                🅣 Add text
+                🅣 Text
+              </button>
+              <button
+                onClick={() => setEditTool('crop')}
+                style={editTool === 'crop' ? btnPrimary : btnGhost}
+                title="Drag to choose the area to keep; drag its corners to adjust"
+              >
+                ✂️ Crop
               </button>
               <button onClick={undo} style={btnGhost} title="Undo (Ctrl+Z)">↩ Undo</button>
               <button onClick={redo} style={btnGhost} title="Redo (Ctrl+Y)">↪ Redo</button>
@@ -1641,7 +1837,7 @@ export default function Home() {
                 title="File name"
                 style={{ background: '#252525', border: '1px solid #333', color: '#e8e8e8', padding: '7px 12px', borderRadius: '8px', fontSize: '13px', outline: 'none', width: '160px' }}
               />
-              <button onClick={() => setEditingFile(null)} style={btnGhost}>Cancel</button>
+              <button onClick={copyEditedImage} style={btnGhost} title="Copy the edited image to paste into Jira, Slack, Teams…">📋 Copy</button>
               <button onClick={saveEditedImage} disabled={isUploading} style={btnPrimary}>
                 💾 Save to "{editTargetFor(editingFile.folder)}"
               </button>
