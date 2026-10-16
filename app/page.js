@@ -738,10 +738,11 @@ export default function Home() {
   // Load the image once when the editor opens
   useEffect(() => {
     if (!editingFile) { editImageRef.current = null; return; }
+    let cancelled = false;
+    let objectUrl = null;
     const img = new Image();
-    // Request the image with CORS so the canvas stays untainted and can be exported (toBlob)
-    img.crossOrigin = 'anonymous';
     img.onload = () => {
+      if (cancelled) return;
       editImageRef.current = img;
       const canvas = canvasRef.current;
       if (!canvas) return;
@@ -753,10 +754,28 @@ export default function Home() {
       redraw();
     };
     img.onerror = () => {
+      if (cancelled) return;
       showToast('❌ Could not load image for editing');
       setEditingFile(null);
     };
-    img.src = editingFile.url;
+    // Load our own fresh copy as a local blob: a same-origin image never taints the canvas, so
+    // the edit can be exported, and a copy cached by the viewer (without CORS headers) can't
+    // get in the way.
+    fetchFileBlob(editingFile)
+      .then((blob) => {
+        if (cancelled) return;
+        objectUrl = URL.createObjectURL(blob);
+        img.src = objectUrl;
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        showToast(`❌ Could not load image for editing: ${err.message}`);
+        setEditingFile(null);
+      });
+    return () => {
+      cancelled = true;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
   }, [editingFile]);
 
   // Redraw when annotations change
