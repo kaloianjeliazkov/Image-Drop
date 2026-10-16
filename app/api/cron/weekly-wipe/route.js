@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { getAdmin } from '../../../../lib/supabase/admin';
-import { BUCKET, FILES_TABLE } from '../../../../lib/supabase/config';
+import { FILES_TABLE } from '../../../../lib/supabase/config';
+import { emptyAllStorage } from '../../../../lib/storage';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 300;
@@ -16,10 +17,11 @@ export async function GET(request) {
   const admin = getAdmin();
 
   // 1) Every object in the bucket (files and thumbnails, including any orphans)
-  const { error: emptyError } = await admin.storage.emptyBucket(BUCKET);
-  if (emptyError) {
-    console.error('[weekly-wipe] Emptying storage failed:', emptyError.message);
-    return NextResponse.json({ error: emptyError.message }, { status: 500 });
+  try {
+    await emptyAllStorage();
+  } catch (e) {
+    console.error('[weekly-wipe] Emptying storage failed:', e.message);
+    return NextResponse.json({ error: e.message }, { status: 500 });
   }
 
   // 2) Every row in the file list

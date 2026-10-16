@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { createClient } from '../../../../lib/supabase/server';
-import { getAdmin } from '../../../../lib/supabase/admin';
-import { BUCKET, FILES_TABLE } from '../../../../lib/supabase/config';
+import { FILES_TABLE } from '../../../../lib/supabase/config';
+import { signDownload } from '../../../../lib/storage';
 
 export const dynamic = 'force-dynamic';
 
@@ -26,14 +26,14 @@ export async function GET(request, { params }) {
   // ?thumb=1 serves the small gallery preview when there is one
   const key = params2.get('thumb') === '1' && row.thumb_key ? row.thumb_key : row.storage_key;
   // Ownership was just checked through RLS above, so signing with the service role is safe.
-  const { data, error: signError } = await getAdmin().storage
-    .from(BUCKET)
-    .createSignedUrl(key, SIGNED_URL_SECONDS, download ? { download: row.name } : undefined);
-  if (signError || !data?.signedUrl) {
-    return NextResponse.json({ error: signError?.message || 'Could not sign URL' }, { status: 500 });
+  let signedUrl;
+  try {
+    signedUrl = await signDownload(key, SIGNED_URL_SECONDS, download ? row.name : undefined);
+  } catch (e) {
+    return NextResponse.json({ error: e?.message || 'Could not sign URL' }, { status: 500 });
   }
 
-  const res = NextResponse.redirect(data.signedUrl, 302);
+  const res = NextResponse.redirect(signedUrl, 302);
   // Slightly shorter than the signed URL's lifetime so a cached redirect never points at an expired link.
   res.headers.set('Cache-Control', `private, max-age=${SIGNED_URL_SECONDS - 300}`);
   return res;
