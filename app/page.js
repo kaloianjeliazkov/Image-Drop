@@ -54,7 +54,8 @@ export default function Home() {
   const [tempShape, setTempShape] = useState(null); // arrow / box / crop being drawn
   const [editTool, setEditTool] = useState('arrow'); // 'arrow' | 'box' | 'text' | 'crop'
   const [arrowColor, setArrowColor] = useState('#ff3b30'); // arrows & boxes: red (default) or green
-  const [selectedAnn, setSelectedAnn] = useState(-1); // index of the box/crop/arrow/text last touched
+  const [selectedAnn, setSelectedAnn] = useState(-1);
+  const [editorReady, setEditorReady] = useState(false); // image loaded into the editor canvas // index of the box/crop/arrow/text last touched
   const [textDraft, setTextDraft] = useState(null);
   const [hoverAnn, setHoverAnn] = useState(false);
   const canvasRef = useRef(null);
@@ -669,6 +670,7 @@ export default function Home() {
     setTextDraft(null);
     setHoverAnn(false);
     setSelectedAnn(-1);
+    setEditorReady(false);
     setEditTool('arrow');
   };
 
@@ -854,6 +856,7 @@ export default function Home() {
       canvas.width = Math.round(img.width * scale);
       canvas.height = Math.round(img.height * scale);
       redraw();
+      setEditorReady(true);
     };
     img.onerror = () => {
       if (cancelled) return;
@@ -1732,7 +1735,15 @@ export default function Home() {
               justifyContent: 'center', padding: '20px'
             }}
           >
-            <div style={{ position: 'relative', display: 'inline-block' }}>
+            {!editorReady && (
+              // While the editor gets its own copy, show the photo that was already on screen
+              <img
+                src={editingFile.url}
+                alt=""
+                style={{ display: 'block', maxWidth: '90vw', maxHeight: 'calc(100vh - 150px)', borderRadius: '8px', opacity: 0.6 }}
+              />
+            )}
+            <div style={{ position: 'relative', display: editorReady ? 'inline-block' : 'none' }}>
               <canvas
                 ref={canvasRef}
                 onPointerDown={onCanvasPointerDown}
