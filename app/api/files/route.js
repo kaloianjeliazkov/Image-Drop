@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { createClient, getUser } from '../../../lib/supabase/server';
 import { FILES_TABLE } from '../../../lib/supabase/config';
 import { objectPath, objectSize, removeObjects } from '../../../lib/storage';
-import { quotaFor, quotaMessage, capMessage } from '../../../lib/quota';
+import { quotaFor, quotaMessage, capMessage, isAdmin, totalStoredBytes, STORAGE_CAP_BYTES } from '../../../lib/quota';
 
 export const dynamic = 'force-dynamic';
 
@@ -49,10 +49,16 @@ export async function GET() {
     const files = (data || []).map(rowToFile);
     const used = files.reduce((sum, f) => sum + (Number(f.size) || 0), 0);
     const { limit } = await quotaFor(supabase, user).catch(() => ({ limit: null }));
+    // Only admin accounts get the total for everyone
+    const storageTotal = isAdmin(user)
+      ? await totalStoredBytes().then((t) => ({ used: t, cap: STORAGE_CAP_BYTES })).catch(() => null)
+      : null;
+
     return NextResponse.json({
       files,
       user: { email: user.email },
       quota: { used, limit },
+      storageTotal,
     });
   } catch (error) {
     return NextResponse.json({ error: error.message }, { status: 500 });

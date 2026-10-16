@@ -31,6 +31,7 @@ export default function Home() {
   const [files, setFiles] = useState([]);
   const [userEmail, setUserEmail] = useState('');
   const [quota, setQuota] = useState(null); // { used, limit } — limit null = unlimited
+  const [storageTotal, setStorageTotal] = useState(null); // { used, cap } — admin accounts only
   const [folders, setFolders] = useState([]);
   const [currentFolder, setCurrentFolder] = useState('');
   const [folderInput, setFolderInput] = useState('');
@@ -136,6 +137,7 @@ export default function Home() {
       setFiles(loaded);
       if (data.user?.email) setUserEmail(data.user.email);
       if (data.quota) setQuota(data.quota);
+      setStorageTotal(data.storageTotal || null);
 
       // Extract unique folders from uploaded files
       const folderMap = {};
@@ -1285,6 +1287,26 @@ export default function Home() {
                       }} />
                     </div>
                   )}
+                </div>
+              )}
+
+              {storageTotal && (
+                <div style={{ marginBottom: '16px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px', marginBottom: '6px' }}>
+                    <strong>All of Koldrop</strong>
+                    <span style={{ color: '#aaa' }}>
+                      {(storageTotal.used / 1e9).toFixed(2)} GB of {Math.round(storageTotal.cap / 1e9)} GB
+                    </span>
+                  </div>
+                  <div style={{ height: '6px', background: '#2a2a2a', borderRadius: '3px', overflow: 'hidden' }}>
+                    <div style={{
+                      height: '100%', width: `${Math.min(100, (storageTotal.used / storageTotal.cap) * 100)}%`,
+                      background: storageTotal.used / storageTotal.cap > 0.9 ? '#e84057' : '#4caf50',
+                    }} />
+                  </div>
+                  <div style={{ fontSize: '11px', color: '#666', marginTop: '4px' }}>
+                    Everyone's files together · uploads stop at the cap · only you can see this
+                  </div>
                 </div>
               )}
 
