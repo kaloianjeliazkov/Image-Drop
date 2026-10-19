@@ -3,7 +3,7 @@ import { createServerClient } from '@supabase/ssr';
 import { SUPABASE_URL, SUPABASE_ANON_KEY } from './lib/supabase/config';
 
 // Routes reachable without being signed in.
-const PUBLIC_PATHS = ['/login', '/auth/callback', '/reset-password', '/privacy', '/terms'];
+const PUBLIC_PATHS = ['/login', '/auth/callback', '/auth/confirm', '/reset-password', '/privacy', '/terms'];
 
 export async function middleware(request) {
   let response = NextResponse.next({ request });
