@@ -74,6 +74,13 @@ export default function Home() {
   
   // Settings & options
   const [showSettings, setShowSettings] = useState(false);
+  // "Back to settings" from /feedback lands on /?settings — reopen the panel, then tidy the URL
+  useEffect(() => {
+    if (new URLSearchParams(window.location.search).has('settings')) {
+      setShowSettings(true);
+      window.history.replaceState(null, '', '/');
+    }
+  }, []);
   const [customDirHandle, setCustomDirHandle] = useState(null);
   const [customDirName, setCustomDirName] = useState('');
   const [autoSaveDirect, setAutoSaveDirect] = useState(false);
@@ -1556,6 +1563,16 @@ export default function Home() {
                     </div>
                   )}
 
+                  <a
+                    href="/feedback"
+                    style={{
+                      display: 'block', textAlign: 'center', padding: '10px', borderRadius: '8px',
+                      background: '#252525', border: '1px solid #333', color: '#e8e8e8',
+                      textDecoration: 'none', fontWeight: 600, fontSize: '14px',
+                    }}
+                  >
+                    🐞 Report a bug / Suggestion
+                  </a>
                 </>
               )}
 

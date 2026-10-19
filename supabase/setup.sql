@@ -59,6 +59,22 @@ create policy "Koldrop own live channel send" on realtime.messages
   for insert to authenticated
   with check ((select realtime.topic()) = 'koldrop:' || (select auth.uid())::text);
 
+-- Bug reports and suggestions from Settings. Users can only add their own; nobody reads them
+-- through the API (the server emails them to the owner and keeps this copy as a backup).
+create table if not exists public.feedback (
+  id         uuid primary key default gen_random_uuid(),
+  user_id    uuid default auth.uid() references auth.users (id) on delete set null,
+  email      text,
+  kind       text not null default 'bug',
+  message    text not null check (char_length(message) between 1 and 5000),
+  emailed    boolean not null default false,
+  created_at timestamptz not null default now()
+);
+alter table public.feedback enable row level security;
+drop policy if exists "Users send feedback" on public.feedback;
+create policy "Users send feedback" on public.feedback
+  for insert to authenticated with check ((select auth.uid()) = user_id);
+
 -- 2) The private "files" bucket is created by scripts/setup-db.mjs through the Storage API.
 --    It has NO storage policies on purpose: browsers never talk to storage with their own
 --    rights. The server checks ownership via user_files (above) and then hands out one-time
