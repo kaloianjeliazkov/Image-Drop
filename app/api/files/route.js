@@ -56,7 +56,7 @@ export async function GET() {
 
     return NextResponse.json({
       files,
-      user: { email: user.email },
+      user: { email: user.email, admin: isAdmin(user) },
       quota: { used, limit },
       storageTotal,
     });

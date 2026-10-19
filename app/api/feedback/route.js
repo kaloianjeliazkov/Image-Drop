@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import nodemailer from 'nodemailer';
 import { createClient, getUser } from '../../../lib/supabase/server';
 import { getAdmin } from '../../../lib/supabase/admin';
+import { isAdmin } from '../../../lib/quota';
 
 export const dynamic = 'force-dynamic';
 
@@ -69,5 +70,35 @@ export async function POST(request) {
     console.error('[feedback] Email failed:', e.message);
     if (!row) return NextResponse.json({ error: 'Could not send right now. Please try again later.' }, { status: 502 });
   }
+  return NextResponse.json({ ok: true });
+}
+
+// Admin accounts only: the reports inbox in Settings.
+async function requireAdmin() {
+  const user = await getUser(createClient());
+  if (!user) return [null, NextResponse.json({ error: 'Please sign in again.' }, { status: 401 })];
+  if (!isAdmin(user)) return [null, NextResponse.json({ error: 'Not allowed' }, { status: 403 })];
+  return [user, null];
+}
+
+export async function GET() {
+  const [, denied] = await requireAdmin();
+  if (denied) return denied;
+  const { data, error } = await getAdmin()
+    .from('feedback')
+    .select('id, email, kind, message, created_at')
+    .order('created_at', { ascending: false })
+    .limit(200);
+  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+  return NextResponse.json({ reports: data || [] });
+}
+
+export async function DELETE(request) {
+  const [, denied] = await requireAdmin();
+  if (denied) return denied;
+  const { id } = await request.json().catch(() => ({}));
+  if (!id) return NextResponse.json({ error: 'Missing id' }, { status: 400 });
+  const { error } = await getAdmin().from('feedback').delete().eq('id', id);
+  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
   return NextResponse.json({ ok: true });
 }
