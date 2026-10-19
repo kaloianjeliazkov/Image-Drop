@@ -37,6 +37,7 @@ export default function Home() {
   const [files, setFiles] = useState([]);
   const [userEmail, setUserEmail] = useState('');
   const [quota, setQuota] = useState(null); // { used, limit } — limit null = unlimited
+  const [isAdminUser, setIsAdminUser] = useState(false); // sees the Reports inbox
   const [storageTotal, setStorageTotal] = useState(null); // { used, cap } — admin accounts only
   const [currentFolder, setCurrentFolder] = useState('');
   const [folderInput, setFolderInput] = useState('');
@@ -165,6 +166,7 @@ export default function Home() {
       if (data.user?.email) setUserEmail(data.user.email);
       if (data.quota) setQuota(data.quota);
       setStorageTotal(data.storageTotal || null);
+      setIsAdminUser(Boolean(data.user?.admin));
 
     } catch (err) {
       console.error(err);
@@ -1512,7 +1514,7 @@ export default function Home() {
 
             {/* Menus */}
             {settingsTab !== 'feedback' && <div style={{ display: 'flex', gap: '6px', marginBottom: '18px', background: '#161616', padding: '4px', borderRadius: '10px' }}>
-              {[['general', 'General'], ['download', 'Download folder'], ['folders', 'Folders']].map(([id, label]) => (
+              {[['general', 'General'], ['download', 'Download folder'], ['folders', 'Folders'], ...(isAdminUser ? [['reports', 'Reports']] : [])].map(([id, label]) => (
                 <button
                   key={id}
                   onClick={() => setSettingsTab(id)}
@@ -1662,6 +1664,8 @@ export default function Home() {
                   ))}
                 </>
               )}
+
+              {settingsTab === 'reports' && isAdminUser && <ReportsInbox />}
 
               {settingsTab === 'feedback' && <FeedbackForm onBack={() => setSettingsTab('general')} />}
             </div>
@@ -2108,6 +2112,94 @@ function FeedbackForm({ onBack }) {
           {status === 'sending' ? 'Sending…' : 'Send'}
         </button>
       </div>
+    </div>
+  );
+}
+
+// Admin-only list of bug reports and suggestions, newest first, each with a delete button.
+function ReportsInbox() {
+  const [reports, setReports] = useState(null);
+  const [error, setError] = useState('');
+  const [filter, setFilter] = useState('all'); // all | bug | suggestion
+  const [deleting, setDeleting] = useState(null);
+
+  useEffect(() => {
+    fetch('/api/feedback', { cache: 'no-store' })
+      .then((r) => r.json().then((d) => (r.ok ? d : Promise.reject(new Error(d.error || 'Could not load reports')))))
+      .then((d) => setReports(d.reports))
+      .catch((e) => setError(e.message));
+  }, []);
+
+  const remove = async (id) => {
+    if (!window.confirm('Delete this report?')) return;
+    setDeleting(id);
+    try {
+      const res = await fetch('/api/feedback', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id }),
+      });
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'Could not delete');
+      setReports((list) => list.filter((r) => r.id !== id));
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setDeleting(null);
+    }
+  };
+
+  if (error && !reports) return <p style={{ color: '#e84057', margin: 0 }}>{error}</p>;
+  if (!reports) return <p style={{ color: '#888', margin: 0 }}>Loading…</p>;
+
+  const count = (k) => reports.filter((r) => r.kind === k).length;
+  const shown = filter === 'all' ? reports : reports.filter((r) => r.kind === filter);
+
+  return (
+    <div>
+      <div style={{ display: 'flex', gap: '6px', marginBottom: '12px' }}>
+        {[['all', `All (${reports.length})`], ['bug', `🐞 Bugs (${count('bug')})`], ['suggestion', `💡 Ideas (${count('suggestion')})`]].map(([id, label]) => (
+          <button
+            key={id}
+            onClick={() => setFilter(id)}
+            style={{
+              padding: '5px 10px', borderRadius: '999px', fontSize: '12px', cursor: 'pointer',
+              border: `1px solid ${filter === id ? '#6c63ff' : '#333'}`,
+              background: filter === id ? 'rgba(108,99,255,0.15)' : 'transparent',
+              color: filter === id ? '#c9c5ff' : '#999',
+            }}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+      {error && <p style={{ color: '#e84057', fontSize: '12px', margin: '0 0 8px' }}>{error}</p>}
+      {shown.length === 0 ? (
+        <p style={{ color: '#777', margin: '16px 0', textAlign: 'center' }}>No reports yet.</p>
+      ) : (
+        shown.map((r) => (
+          <div key={r.id} style={{ background: '#252525', borderRadius: '8px', padding: '10px 12px', marginBottom: '8px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px', marginBottom: '6px' }}>
+              <span style={{ fontSize: '12px', color: '#999', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {r.kind === 'suggestion' ? '💡' : '🐞'}{' '}
+                <a href={`mailto:${r.email}?subject=${encodeURIComponent('Re: your Koldrop ' + (r.kind === 'suggestion' ? 'suggestion' : 'bug report'))}`} style={{ color: '#c9c5ff', textDecoration: 'none' }}>
+                  {r.email || 'unknown'}
+                </a>
+                {' · '}
+                {new Date(r.created_at).toLocaleString([], { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
+              </span>
+              <button
+                onClick={() => remove(r.id)}
+                disabled={deleting === r.id}
+                title="Delete"
+                style={{ background: 'none', border: 'none', color: '#e84057', cursor: 'pointer', fontSize: '13px', flexShrink: 0, opacity: deleting === r.id ? 0.4 : 1 }}
+              >
+                🗑 Delete
+              </button>
+            </div>
+            <div style={{ color: '#ddd', fontSize: '13px', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{r.message}</div>
+          </div>
+        ))
+      )}
     </div>
   );
 }
