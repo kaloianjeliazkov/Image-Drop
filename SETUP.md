@@ -84,3 +84,13 @@ npm run dev
 - **Isolation:** row-level security on `user_files` means a user can only see or delete their own
   rows; the bucket is private with no storage policies, so the only way in is a signed URL the
   server hands out after that check.
+
+## Email (Gmail SMTP)
+
+Login/sign-up emails and bug-report emails are sent through a Gmail app password.
+
+- **Supabase** → Authentication → Emails → SMTP Settings: host `smtp.gmail.com`, port `465`,
+  username/sender = the Gmail address, password = the app password, sender name `Koldrop`.
+- **Vercel** env vars (Production): `SMTP_USER` (the Gmail address) and `SMTP_PASS` (app password,
+  Sensitive). Optional `FEEDBACK_TO` changes who receives bug reports (default the owner).
+  Reports are also kept in the `feedback` table and shown in Settings → Reports for admins.
