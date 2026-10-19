@@ -1336,12 +1336,21 @@ export default function Home() {
             background: '#161616', border: '1px solid #282828', borderRadius: '10px',
             padding: '10px 14px', marginBottom: '16px', flexWrap: 'wrap', gap: '10px'
           }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
               <button onClick={handleSelectAll} style={btnGhost}>
                 {selectedUrls.size === currentFolderFiles.length ? '☑ Deselect All' : '☐ Select All'}
               </button>
               <span style={{ fontSize: '13px', color: '#888' }}>
                 {selectedUrls.size > 0 ? `${selectedUrls.size} of ${currentFolderFiles.length} selected` : `${currentFolderFiles.length} item(s)`}
+              </span>
+              <span
+                title="After a file is saved to your device it is deleted from Koldrop, to keep storage free."
+                style={{
+                  fontSize: '12px', color: '#f0b429', background: 'rgba(240,180,41,0.1)',
+                  border: '1px solid rgba(240,180,41,0.3)', borderRadius: '999px', padding: '3px 10px',
+                }}
+              >
+                ⓘ Downloading a file deletes it from Koldrop
               </span>
             </div>
 
