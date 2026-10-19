@@ -74,13 +74,7 @@ export default function Home() {
   
   // Settings & options
   const [showSettings, setShowSettings] = useState(false);
-  // "Back to settings" from /feedback lands on /?settings — reopen the panel, then tidy the URL
-  useEffect(() => {
-    if (new URLSearchParams(window.location.search).has('settings')) {
-      setShowSettings(true);
-      window.history.replaceState(null, '', '/');
-    }
-  }, []);
+
   const [customDirHandle, setCustomDirHandle] = useState(null);
   const [customDirName, setCustomDirName] = useState('');
   const [autoSaveDirect, setAutoSaveDirect] = useState(false);
@@ -93,7 +87,11 @@ export default function Home() {
   const deleteAfterDownload = true;
   // { folders: [...names in tab order], editTargets: { source: destination } } — saved on the account
   const [folderPrefs, setFolderPrefs] = useState(null);
-  const [settingsTab, setSettingsTab] = useState('general');
+  const [settingsTab, setSettingsTab] = useState('general'); // general | download | folders | feedback
+  // The feedback screen is a sub-page: reopening Settings always starts on the menus
+  useEffect(() => {
+    if (showSettings) setSettingsTab((t) => (t === 'feedback' ? 'general' : t));
+  }, [showSettings]);
   const [newFolderName, setNewFolderName] = useState('');
 
   const fileInputRef = useRef(null);
@@ -1499,12 +1497,21 @@ export default function Home() {
             }}
           >
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
-              <h3 style={{ margin: 0, fontSize: '18px' }}>⚙️ Settings</h3>
+              {settingsTab === 'feedback' ? (
+                <button
+                  onClick={() => setSettingsTab('general')}
+                  style={{ background: 'none', border: 'none', color: '#e8e8e8', fontSize: '17px', fontWeight: 700, cursor: 'pointer', padding: 0 }}
+                >
+                  ← Report a bug / Suggestion
+                </button>
+              ) : (
+                <h3 style={{ margin: 0, fontSize: '18px' }}>⚙️ Settings</h3>
+              )}
               <button onClick={() => setShowSettings(false)} style={{ background: 'none', border: 'none', color: '#888', fontSize: '20px', cursor: 'pointer' }}>✕</button>
             </div>
 
             {/* Menus */}
-            <div style={{ display: 'flex', gap: '6px', marginBottom: '18px', background: '#161616', padding: '4px', borderRadius: '10px' }}>
+            {settingsTab !== 'feedback' && <div style={{ display: 'flex', gap: '6px', marginBottom: '18px', background: '#161616', padding: '4px', borderRadius: '10px' }}>
               {[['general', 'General'], ['download', 'Download folder'], ['folders', 'Folders']].map(([id, label]) => (
                 <button
                   key={id}
@@ -1519,7 +1526,7 @@ export default function Home() {
                   {label}
                 </button>
               ))}
-            </div>
+            </div>}
 
             <div style={{ fontSize: '14px', color: '#bbb', lineHeight: '1.5', marginBottom: '20px', maxHeight: '60vh', overflowY: 'auto' }}>
               {settingsTab === 'general' && (
@@ -1563,16 +1570,16 @@ export default function Home() {
                     </div>
                   )}
 
-                  <a
-                    href="/feedback"
+                  <button
+                    onClick={() => setSettingsTab('feedback')}
                     style={{
-                      display: 'block', textAlign: 'center', padding: '10px', borderRadius: '8px',
+                      display: 'block', width: '100%', textAlign: 'center', padding: '10px', borderRadius: '8px',
                       background: '#252525', border: '1px solid #333', color: '#e8e8e8',
-                      textDecoration: 'none', fontWeight: 600, fontSize: '14px',
+                      fontWeight: 600, fontSize: '14px', cursor: 'pointer',
                     }}
                   >
-                    🐞 Report a bug / Suggestion
-                  </a>
+                    🐞 Report a bug / Suggestion ›
+                  </button>
                 </>
               )}
 
@@ -1655,18 +1662,24 @@ export default function Home() {
                   ))}
                 </>
               )}
+
+              {settingsTab === 'feedback' && <FeedbackForm onBack={() => setSettingsTab('general')} />}
             </div>
 
-            <button onClick={() => setShowSettings(false)} style={{ ...btnGhost, width: '100%', padding: '10px' }}>
-              Done
-            </button>
+            {settingsTab !== 'feedback' && (
+              <>
+                <button onClick={() => setShowSettings(false)} style={{ ...btnGhost, width: '100%', padding: '10px' }}>
+                  Done
+                </button>
 
-            <button
-              onClick={handleLogout}
-              style={{ ...btnGhost, width: '100%', padding: '10px', marginTop: '8px', color: '#999' }}
-            >
-              Log out{userEmail ? ` (${userEmail})` : ''}
-            </button>
+                <button
+                  onClick={handleLogout}
+                  style={{ ...btnGhost, width: '100%', padding: '10px', marginTop: '8px', color: '#999' }}
+                >
+                  Log out{userEmail ? ` (${userEmail})` : ''}
+                </button>
+              </>
+            )}
           </div>
         </div>
       )}
@@ -1999,6 +2012,102 @@ function WipeNotice() {
       }}
     >
       ⚠️ All files are deleted every week. Next wipe: <strong>{dateText}</strong> ({inText}). Download anything you want to keep.
+    </div>
+  );
+}
+
+// "Report a bug / Suggestion" — a sub-page inside Settings. Emails the owner via /api/feedback.
+const FEEDBACK_MAX = 5000;
+function FeedbackForm({ onBack }) {
+  const [kind, setKind] = useState('bug');
+  const [message, setMessage] = useState('');
+  const [status, setStatus] = useState('idle'); // idle | sending | sent | error
+  const [error, setError] = useState('');
+
+  const send = async () => {
+    if (!message.trim() || status === 'sending') return;
+    setStatus('sending');
+    setError('');
+    try {
+      const res = await fetch('/api/feedback', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ kind, message, page: navigator.userAgent }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || 'Could not send. Please try again.');
+      setStatus('sent');
+      setMessage('');
+    } catch (err) {
+      setError(err.message);
+      setStatus('error');
+    }
+  };
+
+  if (status === 'sent') {
+    return (
+      <div style={{ textAlign: 'center', padding: '20px 0' }}>
+        <div style={{ fontSize: '32px', marginBottom: '6px' }}>✅</div>
+        <strong style={{ color: '#e8e8e8' }}>Thanks — sent!</strong>
+        <p style={{ color: '#999', fontSize: '13px', margin: '6px 0 16px' }}>You may get a reply at your account email.</p>
+        <div style={{ display: 'flex', gap: '8px', justifyContent: 'center' }}>
+          <button onClick={() => setStatus('idle')} style={{ padding: '9px 14px', borderRadius: '8px', border: '1px solid #444', background: 'transparent', color: '#ddd', cursor: 'pointer' }}>
+            Send another
+          </button>
+          <button onClick={onBack} style={{ padding: '9px 14px', borderRadius: '8px', border: 'none', background: '#6c63ff', color: '#fff', cursor: 'pointer' }}>
+            Back to settings
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  const disabled = !message.trim() || status === 'sending';
+  return (
+    <div>
+      <div style={{ display: 'flex', gap: '6px', marginBottom: '12px', background: '#161616', padding: '4px', borderRadius: '10px' }}>
+        {[['bug', '🐞 Bug'], ['suggestion', '💡 Suggestion']].map(([id, label]) => (
+          <button
+            key={id}
+            onClick={() => setKind(id)}
+            style={{
+              flex: 1, padding: '8px', borderRadius: '8px', border: 'none', cursor: 'pointer', fontSize: '13px', fontWeight: 600,
+              background: kind === id ? '#6c63ff' : 'transparent', color: kind === id ? '#fff' : '#999',
+            }}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+      <textarea
+        value={message}
+        onChange={(e) => setMessage(e.target.value.slice(0, FEEDBACK_MAX))}
+        placeholder={kind === 'bug'
+          ? 'What happened? What did you expect? Steps to make it happen again help a lot.'
+          : 'What would you like Koldrop to do?'}
+        rows={8}
+        autoFocus
+        style={{
+          width: '100%', boxSizing: 'border-box', background: '#161616', color: '#e8e8e8',
+          border: '1px solid #333', borderRadius: '10px', padding: '12px', fontSize: '14px',
+          fontFamily: 'inherit', resize: 'vertical', outline: 'none',
+        }}
+      />
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '10px', gap: '12px' }}>
+        <span style={{ fontSize: '12px', color: status === 'error' ? '#e84057' : '#666' }}>
+          {status === 'error' ? error : `${message.length} / ${FEEDBACK_MAX}`}
+        </span>
+        <button
+          onClick={send}
+          disabled={disabled}
+          style={{
+            padding: '9px 22px', borderRadius: '8px', border: 'none', fontWeight: 600, fontSize: '14px',
+            background: '#6c63ff', color: '#fff', cursor: disabled ? 'default' : 'pointer', opacity: disabled ? 0.5 : 1,
+          }}
+        >
+          {status === 'sending' ? 'Sending…' : 'Send'}
+        </button>
+      </div>
     </div>
   );
 }
