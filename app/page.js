@@ -56,14 +56,10 @@ export default function Home() {
   const [editTool, setEditTool] = useState('arrow'); // 'arrow' | 'box' | 'text' | 'crop'
   const [arrowColor, setArrowColor] = useState('#ff3b30'); // arrows, boxes & text: red (default) or green
   const [selectedAnn, setSelectedAnn] = useState(-1);
-  // Colour for new arrows, boxes and text; also recolours whatever is selected
+  // Colour for arrows, boxes and text added from now on (what's already drawn keeps its colour)
   const pickColor = (c) => {
     setArrowColor(c);
     if (editTool === 'crop') setEditTool('arrow');
-    const a = annotations[selectedAnn];
-    if (!a || a.type === 'crop' || a.color === c) return;
-    pushUndo(); // so Ctrl+Z restores the old colour
-    setAnnotations((prev) => prev.map((x, i) => (i === selectedAnn ? { ...x, color: c } : x)));
   };
   const [editorReady, setEditorReady] = useState(false); // image loaded into the editor canvas // index of the box/crop/arrow/text last touched
   const [textDraft, setTextDraft] = useState(null);
@@ -722,6 +718,32 @@ export default function Home() {
     setEditorReady(false);
     setEditTool('arrow');
   };
+
+  // Space available for the photo in the editor (between the top and the tool bar). The canvas
+  // is sized to fit it, so on a phone the photo never slides under the tools.
+  const photoAreaRef = useRef(null);
+  const [photoArea, setPhotoArea] = useState(null);
+  useEffect(() => {
+    const el = photoAreaRef.current;
+    if (!editingFile || !el) return;
+    const measure = () => {
+      const cs = getComputedStyle(el);
+      setPhotoArea({
+        w: el.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight),
+        h: el.clientHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom),
+      });
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [editingFile]);
+  const canvasFit = (() => {
+    const c = canvasRef.current;
+    if (!editorReady || !c || !photoArea || !c.width || !c.height) return null;
+    const k = Math.min(photoArea.w / c.width, photoArea.h / c.height, 1);
+    return { width: `${Math.floor(c.width * k)}px`, height: `${Math.floor(c.height * k)}px` };
+  })();
 
   // Pointer position in canvas pixels, clamped to the image so drags can't leave it
   const canvasPos = (e) => {
@@ -1810,6 +1832,7 @@ export default function Home() {
           {/* Photo (framed exactly like the lightbox). Clicking the empty space around it closes
               the editor and goes back to where you were; asks first if there are unsaved edits. */}
           <div
+            ref={photoAreaRef}
             onClick={(e) => {
               if (e.target !== e.currentTarget) return;
               if (annotations.length && !confirm('Discard your edits?')) return;
@@ -1817,7 +1840,7 @@ export default function Home() {
             }}
             style={{
               flex: 1, minHeight: 0, display: 'flex', alignItems: 'center',
-              justifyContent: 'center', padding: '20px'
+              justifyContent: 'center', padding: '72px 12px 12px', overflow: 'hidden'
             }}
           >
             {!editorReady && (
@@ -1825,7 +1848,7 @@ export default function Home() {
               <img
                 src={editingFile.url}
                 alt=""
-                style={{ display: 'block', maxWidth: '90vw', maxHeight: 'calc(100vh - 150px)', borderRadius: '8px', opacity: 0.6 }}
+                style={{ display: 'block', maxWidth: '100%', maxHeight: '100%', objectFit: 'contain', borderRadius: '8px', opacity: 0.6 }}
               />
             )}
             <div style={{ position: 'relative', display: editorReady ? 'inline-block' : 'none' }}>
@@ -1838,7 +1861,7 @@ export default function Home() {
                 onPointerLeave={() => setHoverAnn(false)}
                 // Stop the browser moving focus off the text field we just opened (and selecting page text while dragging)
                 onMouseDown={(e) => e.preventDefault()}
-                style={{ display: 'block', maxWidth: '90vw', maxHeight: 'calc(100vh - 150px)', width: 'auto', height: 'auto', borderRadius: '8px', cursor: hoverAnn === 'resize' ? 'nwse-resize' : hoverAnn ? 'move' : editTool === 'text' ? 'text' : 'crosshair', background: '#000', touchAction: 'none' }}
+                style={{ display: 'block', maxWidth: '100%', maxHeight: '100%', width: canvasFit?.width || 'auto', height: canvasFit?.height || 'auto', borderRadius: '8px', cursor: hoverAnn === 'resize' ? 'nwse-resize' : hoverAnn ? 'move' : editTool === 'text' ? 'text' : 'crosshair', background: '#000', touchAction: 'none' }}
               />
               {textDraft && (() => {
                 const canvas = canvasRef.current;
@@ -1883,7 +1906,8 @@ export default function Home() {
           }}>
             <div style={{ fontSize: '11px', color: '#777', marginBottom: '8px', textAlign: 'center' }}>
               {{ arrow: 'Drag to draw an arrow', box: 'Drag to draw a box', text: 'Click to place text', crop: 'Drag to choose the area to keep' }[editTool]}
-              {' • '}click something to select, drag to move, corners to resize • Ctrl+Z / Ctrl+Y
+              <span className="kd-edit-hint-extra">{' • '}click something to select, drag to move, corners to resize • Ctrl+Z / Ctrl+Y</span>
+              <style>{'@media (max-width: 640px) { .kd-edit-hint-extra { display: none } }'}</style>
             </div>
             <div style={{ display: 'flex', gap: '8px', alignItems: 'center', justifyContent: 'center', flexWrap: 'wrap' }}>
               <button
