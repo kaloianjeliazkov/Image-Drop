@@ -1,8 +1,19 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { createClient } from '../../lib/supabase/browser';
 import { isValidEmail } from '../../lib/email';
+
+// Google's own sign-in button runs on koldrop.vercel.app, so Google's consent screen names
+// Koldrop instead of the Supabase project address. The ID token it returns is handed to Supabase.
+const GOOGLE_CLIENT_ID =
+  process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID ||
+  '554884904686-1s3gqt196f9fva89tq3c69rl66d8ckkp.apps.googleusercontent.com';
+
+const sha256Hex = async (text) => {
+  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
+  return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, '0')).join('');
+};
 
 // mode: 'signin' | 'signup' | 'forgot'
 export default function LoginPage() {
@@ -12,6 +23,9 @@ export default function LoginPage() {
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [busy, setBusy] = useState(false);
+  // 'loading' → Google's button is being set up; 'ready' → shown; 'fallback' → old redirect button
+  const [gisState, setGisState] = useState('loading');
+  const googleBtnRef = useRef(null);
 
   useEffect(() => {
     const err = new URLSearchParams(window.location.search).get('error');
@@ -90,6 +104,71 @@ export default function LoginPage() {
     }
   };
 
+  // Set up Google's button (re-rendered when switching between sign in / sign up)
+  useEffect(() => {
+    if (mode === 'forgot') return;
+    let cancelled = false;
+    const fallback = setTimeout(() => !cancelled && setGisState((s) => (s === 'ready' ? s : 'fallback')), 6000);
+
+    const setup = async () => {
+      if (cancelled || !window.google?.accounts?.id || !googleBtnRef.current) return;
+      const rawNonce = crypto.randomUUID() + crypto.randomUUID();
+      const hashedNonce = await sha256Hex(rawNonce);
+      window.google.accounts.id.initialize({
+        client_id: GOOGLE_CLIENT_ID,
+        nonce: hashedNonce,
+        ux_mode: 'popup',
+        callback: async ({ credential }) => {
+          setError('');
+          setBusy(true);
+          const { error: err } = await createClient().auth.signInWithIdToken({
+            provider: 'google',
+            token: credential,
+            nonce: rawNonce,
+          });
+          if (err) {
+            setError(err.message);
+            setBusy(false);
+            setup(); // fresh nonce for another try
+            return;
+          }
+          window.location.href = nextPath();
+        },
+      });
+      googleBtnRef.current.innerHTML = '';
+      window.google.accounts.id.renderButton(googleBtnRef.current, {
+        theme: 'outline',
+        size: 'large',
+        shape: 'rectangular',
+        text: mode === 'signup' ? 'signup_with' : 'continue_with',
+        width: googleBtnRef.current.offsetWidth || 276,
+        logo_alignment: 'center',
+      });
+      setGisState('ready');
+    };
+
+    if (window.google?.accounts?.id) {
+      setup();
+    } else {
+      let script = document.getElementById('gsi-client');
+      if (!script) {
+        script = document.createElement('script');
+        script.id = 'gsi-client';
+        script.src = 'https://accounts.google.com/gsi/client';
+        script.async = true;
+        document.head.appendChild(script);
+      }
+      script.addEventListener('load', setup);
+      script.addEventListener('error', () => !cancelled && setGisState('fallback'));
+    }
+    return () => {
+      cancelled = true;
+      clearTimeout(fallback);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mode]);
+
+  // Backup if Google's button can't load (blocked script, old browser): the redirect flow
   const onGoogle = async () => {
     setError('');
     setBusy(true);
@@ -144,7 +223,15 @@ export default function LoginPage() {
 
         {mode !== 'forgot' && (
           <>
-            <button
+            <div
+              ref={googleBtnRef}
+              style={{
+                width: '100%', minHeight: gisState === 'fallback' ? 0 : '44px',
+                display: gisState === 'fallback' ? 'none' : 'flex', justifyContent: 'center',
+                colorScheme: 'light', opacity: busy ? 0.6 : 1, pointerEvents: busy ? 'none' : 'auto',
+              }}
+            />
+            {gisState === 'fallback' && <button
               type="button"
               onClick={onGoogle}
               disabled={busy}
@@ -162,7 +249,7 @@ export default function LoginPage() {
                 <path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/>
               </svg>
               Continue with Google
-            </button>
+            </button>}
             <div style={{ display: 'flex', alignItems: 'center', gap: '10px', margin: '18px 0', color: '#555', fontSize: '12px' }}>
               <div style={{ flex: 1, height: '1px', background: '#2a2a2a' }} />
               or
