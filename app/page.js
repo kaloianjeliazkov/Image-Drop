@@ -978,7 +978,8 @@ export default function Home() {
         return;
       }
       if (!mod) return;
-      const key = (e.key || '').toLowerCase();
+      // e.code is the physical key, so this also works with a Bulgarian/Cyrillic keyboard layout
+      const key = e.code === 'KeyZ' ? 'z' : e.code === 'KeyY' ? 'y' : (e.key || '').toLowerCase();
       if (key === 'z' && !e.shiftKey) {
         e.preventDefault();
         undo();
@@ -1863,7 +1864,12 @@ export default function Home() {
                 onPointerCancel={onCanvasPointerUp}
                 onPointerLeave={() => setHoverAnn(false)}
                 // Stop the browser moving focus off the text field we just opened (and selecting page text while dragging)
-                onMouseDown={(e) => e.preventDefault()}
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  // Leaving the file-name box by drawing: drop its focus so Ctrl+Z / Ctrl+Y work on the image again
+                  const el = document.activeElement;
+                  if (!textDraft && el && el.tagName === 'INPUT') el.blur();
+                }}
                 style={{ display: 'block', maxWidth: '100%', maxHeight: '100%', width: canvasFit?.width || 'auto', height: canvasFit?.height || 'auto', borderRadius: '8px', cursor: hoverAnn === 'resize' ? 'nwse-resize' : hoverAnn ? 'move' : editTool === 'text' ? 'text' : 'crosshair', background: '#000', touchAction: 'none' }}
               />
               {textDraft && (() => {
