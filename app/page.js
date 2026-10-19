@@ -1818,7 +1818,10 @@ export default function Home() {
           }}
         >
           <button
-            onClick={() => setEditingFile(null)}
+            onClick={() => {
+              if (annotations.length && !confirm('Discard your edits?')) return;
+              setEditingFile(null);
+            }}
             style={{
               position: 'absolute', top: '20px', right: '20px', fontSize: '32px', color: 'white',
               background: 'rgba(255,255,255,0.1)', border: 'none', borderRadius: '50%',
