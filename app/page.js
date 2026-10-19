@@ -54,8 +54,17 @@ export default function Home() {
   const [annotations, setAnnotations] = useState([]);
   const [tempShape, setTempShape] = useState(null); // arrow / box / crop being drawn
   const [editTool, setEditTool] = useState('arrow'); // 'arrow' | 'box' | 'text' | 'crop'
-  const [arrowColor, setArrowColor] = useState('#ff3b30'); // arrows & boxes: red (default) or green
+  const [arrowColor, setArrowColor] = useState('#ff3b30'); // arrows, boxes & text: red (default) or green
   const [selectedAnn, setSelectedAnn] = useState(-1);
+  // Colour for new arrows, boxes and text; also recolours whatever is selected
+  const pickColor = (c) => {
+    setArrowColor(c);
+    if (editTool === 'crop') setEditTool('arrow');
+    const a = annotations[selectedAnn];
+    if (!a || a.type === 'crop' || a.color === c) return;
+    pushUndo(); // so Ctrl+Z restores the old colour
+    setAnnotations((prev) => prev.map((x, i) => (i === selectedAnn ? { ...x, color: c } : x)));
+  };
   const [editorReady, setEditorReady] = useState(false); // image loaded into the editor canvas // index of the box/crop/arrow/text last touched
   const [textDraft, setTextDraft] = useState(null);
   const [hoverAnn, setHoverAnn] = useState(false);
@@ -755,7 +764,7 @@ export default function Home() {
         ctx.lineWidth = 6 * k;
         ctx.lineJoin = 'round';
         ctx.strokeStyle = 'rgba(0,0,0,0.85)';
-        ctx.fillStyle = '#ffffff';
+        ctx.fillStyle = a.color || '#ffffff';
         ctx.strokeText(a.text, a.x, a.y);
         ctx.fillText(a.text, a.x, a.y);
       } else if (a.type === 'box') {
@@ -1126,7 +1135,7 @@ export default function Home() {
   const commitTextDraft = () => {
     if (textDraft && textDraft.value.trim()) {
       pushUndo();
-      setAnnotations(prev => [...prev, { type: 'text', x: textDraft.x, y: textDraft.y, text: textDraft.value.trim() }]);
+      setAnnotations(prev => [...prev, { type: 'text', x: textDraft.x, y: textDraft.y, text: textDraft.value.trim(), color: arrowColor }]);
     }
     setTextDraft(null);
   };
@@ -1842,7 +1851,8 @@ export default function Home() {
                       top: `${(textDraft.y / canvas.height) * 100}%`,
                       transform: 'translateY(-50%)',
                       background: 'rgba(0,0,0,0.9)',
-                      color: '#fff',
+                      color: arrowColor,
+                      fontWeight: 700,
                       border: '1px solid #6c63ff',
                       borderRadius: '6px',
                       padding: '4px 8px',
@@ -1868,18 +1878,18 @@ export default function Home() {
             </div>
             <div style={{ display: 'flex', gap: '8px', alignItems: 'center', justifyContent: 'center', flexWrap: 'wrap' }}>
               <button
-                onClick={() => { setArrowColor('#ff3b30'); if (editTool !== 'box') setEditTool('arrow'); }}
-                title="Red arrows and boxes"
-                aria-label="Red arrow color"
+                onClick={() => pickColor('#ff3b30')}
+                title="Red arrows, boxes and text"
+                aria-label="Red"
                 style={{
                   width: '26px', height: '26px', borderRadius: '50%', padding: 0, cursor: 'pointer',
                   background: '#ff3b30', border: arrowColor === '#ff3b30' ? '3px solid #fff' : '3px solid rgba(255,255,255,0.25)'
                 }}
               />
               <button
-                onClick={() => { setArrowColor('#34c759'); if (editTool !== 'box') setEditTool('arrow'); }}
-                title="Green arrows and boxes"
-                aria-label="Green arrow color"
+                onClick={() => pickColor('#34c759')}
+                title="Green arrows, boxes and text"
+                aria-label="Green"
                 style={{
                   width: '26px', height: '26px', borderRadius: '50%', padding: 0, cursor: 'pointer',
                   background: '#34c759', border: arrowColor === '#34c759' ? '3px solid #fff' : '3px solid rgba(255,255,255,0.25)'
