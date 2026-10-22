@@ -1201,6 +1201,11 @@ export default function Home() {
     }
   };
 
+  // Switching folders always lands on the grid, never on a photo left open in another folder
+  useEffect(() => {
+    setLightboxIndex(null);
+  }, [currentFolder]);
+
   const saveEditedImage = async () => {
     if (!editingFile || !canvasRef.current || !editImageRef.current) return;
     const ext = (editingFile.name.substring(editingFile.name.lastIndexOf('.')) || '.jpg').toLowerCase();
@@ -1230,6 +1235,7 @@ export default function Home() {
         saveFolderPrefs({ ...folderPrefs, folders: [...folderPrefs.folders, folder] });
       }
       setEditingFile(null);
+      setLightboxIndex(null); // close the photo it was opened from, so coming back shows the grid
       setCurrentFolder(folder);
       refreshAfterChange();
     } catch (err) {
