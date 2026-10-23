@@ -1201,6 +1201,30 @@ export default function Home() {
     }
   };
 
+  // Photo viewer: previous / next in the same folder (wraps around); arrow keys and swipes too
+  const stepLightbox = (dir) => {
+    setLightboxIndex((i) => {
+      const n = currentFolderFiles.length;
+      if (i === null || n < 2) return i;
+      return (i + dir + n) % n;
+    });
+  };
+  const stepLightboxRef = useRef(stepLightbox);
+  stepLightboxRef.current = stepLightbox;
+  const swipeRef = useRef(null);
+  useEffect(() => {
+    if (lightboxIndex === null || editingFile) return;
+    const onKey = (e) => {
+      const tag = (e.target && e.target.tagName) || '';
+      if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+      if (e.key === 'ArrowLeft') { e.preventDefault(); stepLightboxRef.current(-1); }
+      else if (e.key === 'ArrowRight') { e.preventDefault(); stepLightboxRef.current(1); }
+      else if (e.key === 'Escape') setLightboxIndex(null);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [lightboxIndex === null, editingFile]);
+
   // Switching folders always lands on the grid, never on a photo left open in another folder
   useEffect(() => {
     setLightboxIndex(null);
@@ -1739,6 +1763,19 @@ export default function Home() {
       {lightboxIndex !== null && currentFolderFiles[lightboxIndex] && (
         <div
           onClick={() => setLightboxIndex(null)}
+          onTouchStart={(e) => {
+            const t = e.touches[0];
+            swipeRef.current = t ? { x: t.clientX, y: t.clientY } : null;
+          }}
+          onTouchEnd={(e) => {
+            const start = swipeRef.current;
+            const t = e.changedTouches[0];
+            swipeRef.current = null;
+            if (!start || !t) return;
+            const dx = t.clientX - start.x;
+            const dy = t.clientY - start.y;
+            if (Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy) * 1.5) stepLightbox(dx < 0 ? 1 : -1);
+          }}
           style={{
             position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.92)', zIndex: 200,
             display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px'
@@ -1754,6 +1791,34 @@ export default function Home() {
           >
             ✕
           </button>
+
+          {currentFolderFiles.length > 1 && (
+            <>
+              <div style={{
+                position: 'absolute', top: '30px', left: '24px', color: '#bbb', fontSize: '14px',
+                background: 'rgba(0,0,0,0.5)', padding: '4px 10px', borderRadius: '12px',
+              }}>
+                {lightboxIndex + 1} / {currentFolderFiles.length}
+              </div>
+              {[[-1, '‹', 'left', 'Previous'], [1, '›', 'right', 'Next']].map(([dir, glyph, side, label]) => (
+                <button
+                  key={side}
+                  onClick={(e) => { e.stopPropagation(); stepLightbox(dir); }}
+                  aria-label={label}
+                  title={`${label} (${side === 'left' ? '←' : '→'})`}
+                  style={{
+                    position: 'absolute', top: '50%', [side]: '12px', transform: 'translateY(-50%)',
+                    width: '48px', height: '48px', borderRadius: '50%', border: 'none',
+                    background: 'rgba(255,255,255,0.15)', color: '#fff', fontSize: '34px', lineHeight: 1,
+                    cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    paddingBottom: '4px', zIndex: 1,
+                  }}
+                >
+                  {glyph}
+                </button>
+              ))}
+            </>
+          )}
 
           {currentFolderFiles[lightboxIndex].isVideo ? (
             <video
