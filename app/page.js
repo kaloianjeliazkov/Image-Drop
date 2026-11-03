@@ -1553,7 +1553,7 @@ export default function Home() {
                       {!file.isVideo && (
                         <button
                           onClick={(e) => { e.stopPropagation(); openEditor(file); }}
-                          style={{ background: 'none', border: 'none', color: '#888', cursor: 'pointer', fontSize: '14px' }}
+                          style={thumbAction}
                           title="Edit image (add text, arrows, rename)"
                         >
                           ✏️
@@ -1561,14 +1561,14 @@ export default function Home() {
                       )}
                       <button
                         onClick={() => downloadSingleFile(file)}
-                        style={{ background: 'none', border: 'none', color: '#888', cursor: 'pointer', fontSize: '14px' }}
+                        style={thumbAction}
                         title="Download file"
                       >
                         ⬇
                       </button>
                       <button
                         onClick={() => handleDelete(file.url)}
-                        style={{ background: 'none', border: 'none', color: '#888', cursor: 'pointer', fontSize: '15px' }}
+                        style={thumbAction}
                         title="Delete file"
                       >
                         🗑
@@ -2126,6 +2126,13 @@ const KLogo = ({ size = 28 }) => (
 const btnGhost = {
   background: 'transparent', color: '#888', border: '1px solid #333',
   padding: '6px 12px', borderRadius: '8px', fontSize: '12px', fontWeight: 600, cursor: 'pointer'
+};
+
+// Small icon buttons under each gallery thumbnail: light chip so they stand out on the dark card
+const thumbAction = {
+  background: 'rgba(255,255,255,0.12)', border: '1px solid rgba(255,255,255,0.18)', color: '#ffffff',
+  cursor: 'pointer', fontSize: '15px', lineHeight: 1, width: '30px', height: '30px', borderRadius: '8px',
+  display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0,
 };
 
 const btnPrimary = {
