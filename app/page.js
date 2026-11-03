@@ -1201,6 +1201,27 @@ export default function Home() {
     }
   };
 
+  // Download the edited image straight to this device (Downloads, or the folder chosen in
+  // Settings). Nothing is uploaded, and the original stays in Koldrop.
+  const downloadEditedImage = async () => {
+    if (!editingFile) return;
+    try {
+      const out = renderEdited();
+      if (!out) return;
+      const ext = (editingFile.name.substring(editingFile.name.lastIndexOf('.')) || '.jpg').toLowerCase();
+      const isPng = ext === '.png';
+      const fallback = editingFile.name.replace(/\.[^.]+$/, '') || 'image';
+      const typed = (editName.trim() || fallback).replace(/[\\/:*?"<>|]/g, '').replace(/^\.+/, '').trim() || 'image';
+      const filename = `${typed}${isPng ? '.png' : '.jpg'}`;
+      const blob = await new Promise((res) => out.toBlob(res, isPng ? 'image/png' : 'image/jpeg', 0.92));
+      if (!blob) throw new Error('Could not render image');
+      if (!(await saveFileToDirectory(filename, blob))) browserSave(blob, filename);
+      showToast(`✓ Downloaded "${filename}"`);
+    } catch (err) {
+      showToast(`❌ Download failed: ${err.message || 'unknown error'}`);
+    }
+  };
+
   // Photo viewer: previous / next in the same folder (wraps around); arrow keys and swipes too
   const stepLightbox = (dir) => {
     setLightboxIndex((i) => {
@@ -2047,6 +2068,7 @@ export default function Home() {
                 style={{ background: '#252525', border: '1px solid #333', color: '#e8e8e8', padding: '7px 12px', borderRadius: '8px', fontSize: '13px', outline: 'none', width: '160px' }}
               />
               <button onClick={copyEditedImage} style={btnGhost} title="Copy the edited image to paste into Jira, Slack, Teams…">📋 Copy</button>
+              <button onClick={downloadEditedImage} style={btnGhost} title="Download the edited image to this device (nothing is uploaded)">⬇ Download edited</button>
               <button onClick={saveEditedImage} disabled={isUploading} style={btnPrimary}>
                 💾 Save to "{editTargetFor(editingFile.folder)}"
               </button>
