@@ -38,6 +38,7 @@ export default function Home() {
   const [userEmail, setUserEmail] = useState('');
   const [quota, setQuota] = useState(null); // { used, limit } — limit null = unlimited
   const [isAdminUser, setIsAdminUser] = useState(false); // sees the Reports inbox
+  const [isOwnerUser, setIsOwnerUser] = useState(false); // sees the Activity tab
   const [storageTotal, setStorageTotal] = useState(null); // { used, cap } — admin accounts only
   const [currentFolder, setCurrentFolder] = useState('');
   const [folderInput, setFolderInput] = useState('');
@@ -172,6 +173,7 @@ export default function Home() {
       if (data.quota) setQuota(data.quota);
       setStorageTotal(data.storageTotal || null);
       setIsAdminUser(Boolean(data.user?.admin));
+      setIsOwnerUser(Boolean(data.user?.owner));
 
     } catch (err) {
       console.error(err);
@@ -662,7 +664,7 @@ export default function Home() {
       await fetch('/api/files', {
         method: 'DELETE',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ urls }),
+        body: JSON.stringify({ urls, reason: 'download' }),
       });
       setSelectedUrls(new Set());
       refreshAfterChange();
@@ -1613,14 +1615,14 @@ export default function Home() {
             </div>
 
             {/* Menus */}
-            {settingsTab !== 'feedback' && <div style={{ display: 'flex', gap: '6px', marginBottom: '18px', background: '#161616', padding: '4px', borderRadius: '10px' }}>
-              {[['general', 'General'], ['download', 'Download folder'], ['folders', 'Folders'], ...(isAdminUser ? [['reports', 'Reports']] : [])].map(([id, label]) => (
+            {settingsTab !== 'feedback' && <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', marginBottom: '18px', background: '#161616', padding: '4px', borderRadius: '10px' }}>
+              {[['general', 'General'], ['download', 'Download folder'], ['folders', 'Folders'], ...(isAdminUser ? [['reports', 'Reports']] : []), ...(isOwnerUser ? [['activity', 'Activity']] : [])].map(([id, label]) => (
                 <button
                   key={id}
                   onClick={() => setSettingsTab(id)}
                   style={{
-                    flex: 1, padding: '8px 6px', borderRadius: '8px', border: 'none', cursor: 'pointer',
-                    fontSize: '13px', fontWeight: 600,
+                    flex: '1 1 auto', padding: '8px 8px', borderRadius: '8px', border: 'none', cursor: 'pointer',
+                    fontSize: '13px', fontWeight: 600, whiteSpace: 'nowrap',
                     background: settingsTab === id ? '#6c63ff' : 'transparent',
                     color: settingsTab === id ? '#fff' : '#999',
                   }}
@@ -1766,6 +1768,8 @@ export default function Home() {
               )}
 
               {settingsTab === 'reports' && isAdminUser && <ReportsInbox />}
+
+              {settingsTab === 'activity' && isOwnerUser && <ActivityPanel />}
 
               {settingsTab === 'feedback' && <FeedbackForm onBack={() => setSettingsTab('general')} />}
             </div>
@@ -2359,6 +2363,121 @@ function ReportsInbox() {
             <div style={{ color: '#ddd', fontSize: '13px', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{r.message}</div>
           </div>
         ))
+      )}
+    </div>
+  );
+}
+
+// Owner-only overview of every account and what it did in the last 30 days.
+const fmtBytes = (b) => {
+  const n = Number(b) || 0;
+  if (n >= 1e9) return `${(n / 1e9).toFixed(2)} GB`;
+  if (n >= 1e6) return `${(n / 1e6).toFixed(1)} MB`;
+  if (n >= 1e3) return `${Math.round(n / 1e3)} KB`;
+  return `${n} B`;
+};
+const fmtAgo = (iso) => {
+  if (!iso) return 'never';
+  const s = (Date.now() - new Date(iso).getTime()) / 1000;
+  if (s < 60) return 'just now';
+  if (s < 3600) return `${Math.floor(s / 60)} min ago`;
+  if (s < 86400) return `${Math.floor(s / 3600)} h ago`;
+  if (s < 86400 * 30) return `${Math.floor(s / 86400)} d ago`;
+  return new Date(iso).toLocaleDateString();
+};
+const ACTION_LABEL = { upload: ['⬆', 'uploaded', '#6c63ff'], download: ['⬇', 'downloaded', '#34c759'], delete: ['🗑', 'deleted', '#e84057'] };
+
+function ActivityPanel() {
+  const [data, setData] = useState(null);
+  const [error, setError] = useState('');
+  const [view, setView] = useState('users'); // users | recent
+  const [who, setWho] = useState('all');
+
+  useEffect(() => {
+    fetch('/api/activity', { cache: 'no-store' })
+      .then((r) => r.json().then((d) => (r.ok ? d : Promise.reject(new Error(d.error || 'Could not load activity')))))
+      .then(setData)
+      .catch((e) => setError(e.message));
+  }, []);
+
+  if (error) return <p style={{ color: '#e84057', margin: 0 }}>{error}</p>;
+  if (!data) return <p style={{ color: '#888', margin: 0 }}>Loading…</p>;
+
+  const users = data.users || [];
+  const recent = (data.recent || []).filter((r) => who === 'all' || r.email === who);
+  const active7 = users.filter((u) => u.last_activity && Date.now() - new Date(u.last_activity) < 7 * 86400000).length;
+  const pill = (id, label) => (
+    <button
+      key={id}
+      onClick={() => setView(id)}
+      style={{
+        padding: '5px 12px', borderRadius: '999px', fontSize: '12px', cursor: 'pointer',
+        border: `1px solid ${view === id ? '#6c63ff' : '#333'}`,
+        background: view === id ? 'rgba(108,99,255,0.15)' : 'transparent', color: view === id ? '#c9c5ff' : '#999',
+      }}
+    >
+      {label}
+    </button>
+  );
+
+  return (
+    <div>
+      <p style={{ margin: '0 0 10px', fontSize: '12px', color: '#888' }}>
+        {users.length} account{users.length === 1 ? '' : 's'} · {active7} active in the last 7 days · last 30 days kept
+      </p>
+      <div style={{ display: 'flex', gap: '6px', marginBottom: '12px' }}>
+        {pill('users', 'People')}
+        {pill('recent', 'Recent activity')}
+      </div>
+
+      {view === 'users' && users.map((u) => (
+        <div
+          key={u.id}
+          onClick={() => { setWho(u.email); setView('recent'); }}
+          title="Show this person's recent activity"
+          style={{ background: '#252525', borderRadius: '8px', padding: '10px 12px', marginBottom: '8px', cursor: 'pointer' }}
+        >
+          <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px', marginBottom: '4px' }}>
+            <strong style={{ fontSize: '13px', color: '#e8e8e8', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{u.email}</strong>
+            <span style={{ fontSize: '12px', color: '#999', flexShrink: 0 }}>{fmtAgo(u.last_activity || u.last_sign_in_at)}</span>
+          </div>
+          <div style={{ fontSize: '12px', color: '#aaa', lineHeight: 1.6 }}>
+            Last 7 days: ⬆ {u.uploads_7d} · ⬇ {u.downloads_7d} · 🗑 {u.deletes_7d}
+            <br />
+            Now storing {u.stored_files} file{Number(u.stored_files) === 1 ? '' : 's'} ({fmtBytes(u.stored_bytes)}) · 30 days: {u.uploads_30d} uploads ({fmtBytes(u.uploaded_bytes_30d)})
+            <br />
+            <span style={{ color: '#777' }}>Joined {new Date(u.created_at).toLocaleDateString()} · last sign-in {fmtAgo(u.last_sign_in_at)}</span>
+          </div>
+        </div>
+      ))}
+
+      {view === 'recent' && (
+        <>
+          <select
+            value={who}
+            onChange={(e) => setWho(e.target.value)}
+            style={{ width: '100%', marginBottom: '10px', background: '#252525', color: '#e8e8e8', border: '1px solid #333', borderRadius: '8px', padding: '7px 10px', fontSize: '13px' }}
+          >
+            <option value="all">Everyone</option>
+            {users.map((u) => <option key={u.id} value={u.email}>{u.email}</option>)}
+          </select>
+          {recent.length === 0 ? (
+            <p style={{ color: '#777', margin: '16px 0', textAlign: 'center' }}>No activity yet.</p>
+          ) : recent.map((r) => {
+            const [icon, verb, color] = ACTION_LABEL[r.action] || ['•', r.action, '#999'];
+            return (
+              <div key={r.id} style={{ display: 'flex', gap: '10px', alignItems: 'flex-start', padding: '7px 0', borderBottom: '1px solid #2a2a2a', fontSize: '12px' }}>
+                <span style={{ color, width: '16px', textAlign: 'center', flexShrink: 0 }}>{icon}</span>
+                <div style={{ minWidth: 0, flex: 1, color: '#ccc' }}>
+                  <span style={{ color: '#e8e8e8' }}>{r.email || 'deleted account'}</span> {verb}{' '}
+                  <span style={{ wordBreak: 'break-all' }}>{r.folder ? `${r.folder}/` : ''}{r.file_name || 'a file'}</span>
+                  <span style={{ color: '#777' }}> · {fmtBytes(r.size)}</span>
+                </div>
+                <span style={{ color: '#777', flexShrink: 0 }}>{fmtAgo(r.created_at)}</span>
+              </div>
+            );
+          })}
+        </>
       )}
     </div>
   );

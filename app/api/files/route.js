@@ -2,7 +2,8 @@ import { NextResponse } from 'next/server';
 import { createClient, getUser } from '../../../lib/supabase/server';
 import { FILES_TABLE } from '../../../lib/supabase/config';
 import { objectPath, objectSize, removeObjects } from '../../../lib/storage';
-import { quotaFor, quotaMessage, capMessage, isAdmin, totalStoredBytes, STORAGE_CAP_BYTES } from '../../../lib/quota';
+import { quotaFor, quotaMessage, capMessage, isAdmin, isUnlimited, totalStoredBytes, STORAGE_CAP_BYTES } from '../../../lib/quota';
+import { logActivity } from '../../../lib/activity';
 
 export const dynamic = 'force-dynamic';
 
@@ -56,7 +57,7 @@ export async function GET() {
 
     return NextResponse.json({
       files,
-      user: { email: user.email, admin: isAdmin(user) },
+      user: { email: user.email, admin: isAdmin(user), owner: isUnlimited(user) },
       quota: { used, limit },
       storageTotal,
     });
@@ -121,6 +122,7 @@ export async function POST(request) {
       .single();
     if (error) throw error;
 
+    await logActivity(user, 'upload', [{ name, folder, size }]);
     return NextResponse.json({ success: true, file: rowToFile(data) });
   } catch (error) {
     // Don't leave an orphaned object in storage if the row could not be written.
@@ -136,13 +138,14 @@ export async function POST(request) {
 }
 
 // Body: { url } or { urls: [...] } — the /api/f/<id> URLs the page already has.
+// reason: 'download' when the file is removed because it was just downloaded (activity log).
 export async function DELETE(request) {
   try {
     const supabase = createClient();
     const user = await getUser(supabase);
     if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 
-    const { url, urls } = await request.json();
+    const { url, urls, reason } = await request.json();
     const list = Array.isArray(urls) ? urls : url ? [url] : [];
     const ids = list.map(idFromUrl).filter(Boolean);
     if (!ids.length) return NextResponse.json({ success: true });
@@ -152,8 +155,9 @@ export async function DELETE(request) {
       .from(FILES_TABLE)
       .delete()
       .in('id', ids)
-      .select('storage_key, thumb_key');
+      .select('storage_key, thumb_key, name, folder, size');
     if (error) throw error;
+    await logActivity(user, reason === 'download' ? 'download' : 'delete', rows || []);
 
     // Remove the files and their thumbnails from storage
     const keys = (rows || []).flatMap((r) => [r.storage_key, r.thumb_key]).filter(Boolean);

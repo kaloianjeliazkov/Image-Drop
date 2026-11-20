@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { getAdmin } from '../../../../lib/supabase/admin';
 import { FILES_TABLE } from '../../../../lib/supabase/config';
 import { emptyAllStorage } from '../../../../lib/storage';
+import { pruneActivity } from '../../../../lib/activity';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 300;
@@ -15,6 +16,9 @@ export async function GET(request) {
   }
 
   const admin = getAdmin();
+
+  // 0) Activity entries older than 30 days (the log itself is kept across wipes)
+  await pruneActivity().catch((e) => console.warn('[weekly-wipe] Activity prune failed:', e.message));
 
   // 1) Every object in the bucket (files and thumbnails, including any orphans)
   try {
