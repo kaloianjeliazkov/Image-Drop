@@ -75,6 +75,43 @@ drop policy if exists "Users send feedback" on public.feedback;
 create policy "Users send feedback" on public.feedback
   for insert to authenticated with check ((select auth.uid()) = user_id);
 
+-- Activity log for the owner's Settings → Activity tab: who uploaded, downloaded or deleted
+-- what and when (names and sizes only, never the files). Written and read only by the server
+-- (service role); no policies, so browsers can't read or write it. Kept for 30 days.
+create table if not exists public.activity_log (
+  id         bigint generated always as identity primary key,
+  user_id    uuid references auth.users (id) on delete set null,
+  email      text,
+  action     text not null,            -- upload | download | delete
+  file_name  text,
+  folder     text,
+  size       bigint not null default 0,
+  created_at timestamptz not null default now()
+);
+create index if not exists activity_log_created_idx on public.activity_log (created_at desc);
+create index if not exists activity_log_user_idx on public.activity_log (user_id, created_at desc);
+alter table public.activity_log enable row level security;
+
+-- One row per account for the Activity tab, computed in the database (no 1000-row limit).
+create or replace function public.koldrop_activity_summary() returns json
+  language sql stable security definer set search_path = ''
+  as $$
+    select coalesce(json_agg(t order by t.last_activity desc nulls last, t.created_at desc), '[]'::json) from (
+      select u.id, u.email, u.created_at, u.last_sign_in_at,
+        (select coalesce(sum(f.size), 0) from public.user_files f where f.user_id = u.id) as stored_bytes,
+        (select count(*) from public.user_files f where f.user_id = u.id) as stored_files,
+        (select count(*) from public.activity_log a where a.user_id = u.id and a.action = 'upload' and a.created_at > now() - interval '7 days') as uploads_7d,
+        (select count(*) from public.activity_log a where a.user_id = u.id and a.action = 'download' and a.created_at > now() - interval '7 days') as downloads_7d,
+        (select count(*) from public.activity_log a where a.user_id = u.id and a.action = 'delete' and a.created_at > now() - interval '7 days') as deletes_7d,
+        (select coalesce(sum(a.size), 0) from public.activity_log a where a.user_id = u.id and a.action = 'upload' and a.created_at > now() - interval '30 days') as uploaded_bytes_30d,
+        (select count(*) from public.activity_log a where a.user_id = u.id and a.action = 'upload' and a.created_at > now() - interval '30 days') as uploads_30d,
+        (select max(a.created_at) from public.activity_log a where a.user_id = u.id) as last_activity
+      from auth.users u
+    ) t
+  $$;
+revoke execute on function public.koldrop_activity_summary() from public, anon, authenticated;
+grant execute on function public.koldrop_activity_summary() to service_role;
+
 -- 2) The private "files" bucket is created by scripts/setup-db.mjs through the Storage API.
 --    It has NO storage policies on purpose: browsers never talk to storage with their own
 --    rights. The server checks ownership via user_files (above) and then hands out one-time
