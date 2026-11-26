@@ -4,10 +4,8 @@ Koldrop now has real accounts. Anyone can sign up with email + password or Googl
 person only ever sees their own files. Files live in a private Supabase Storage bucket instead
 of Vercel Blob, so there are no more Blob "advanced operation" limits.
 
-**Free-plan limits to know about (Supabase):** 1 GB of files in total across all users, and
-50 MB per file. Longer screen recordings over 50 MB will be rejected with a clear message. If
-you outgrow that, the Pro plan raises both; bump `NEXT_PUBLIC_MAX_UPLOAD_MB` and the bucket's
-file size limit to match.
+**File size:** up to 60 MB per file (files are stored in Cloudflare R2). Change it with
+`NEXT_PUBLIC_MAX_UPLOAD_MB` in Vercel → Environment Variables.
 
 ---
 

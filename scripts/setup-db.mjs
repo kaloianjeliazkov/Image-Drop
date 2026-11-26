@@ -12,7 +12,9 @@ import pg from 'pg';
 import { createClient } from '@supabase/supabase-js';
 
 const BUCKET = 'files';
-const MAX_UPLOAD_MB = Number(process.env.NEXT_PUBLIC_MAX_UPLOAD_MB || 50);
+const MAX_UPLOAD_MB = Number(process.env.NEXT_PUBLIC_MAX_UPLOAD_MB || 60);
+// Files go to Cloudflare R2 now; the old Supabase bucket stays within the free plan's 50 MB per-file cap.
+const BUCKET_LIMIT_MB = Math.min(MAX_UPLOAD_MB, 50);
 
 const dbUrls = [process.env.POSTGRES_URL_NON_POOLING, process.env.POSTGRES_URL].filter(Boolean);
 const supabaseUrl = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -59,7 +61,7 @@ if (!applied) throw lastError;
 const supabase = createClient(supabaseUrl, serviceKey, {
   auth: { persistSession: false, autoRefreshToken: false },
 });
-const bucketOptions = { public: false, fileSizeLimit: `${MAX_UPLOAD_MB}MB` };
+const bucketOptions = { public: false, fileSizeLimit: `${BUCKET_LIMIT_MB}MB` };
 const { data: bucket } = await supabase.storage.getBucket(BUCKET);
 if (!bucket) {
   const { error } = await supabase.storage.createBucket(BUCKET, bucketOptions);
